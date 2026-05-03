@@ -1,0 +1,61 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / tooling
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+.npm/
+.pnp.*
+.yarn/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local job / media artifacts (large files; use object storage instead)
+tmp/
+uploads/
+media/
+clips/
+artifacts/
