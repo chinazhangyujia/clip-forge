@@ -53,9 +53,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Local job / media artifacts (large files; use object storage instead)
-tmp/
-uploads/
-media/
-clips/
-artifacts/
+# Local job / media artifacts (large files — use the workspace dir, not the repo).
+# Anchored to repo root so we don't accidentally ignore route folders like
+# web/src/app/projects/[id]/clips/.
+/tmp/
+/uploads/
+/media/
+/clips/
+/artifacts/
