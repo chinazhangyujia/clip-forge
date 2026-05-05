@@ -8,6 +8,27 @@ export const fmtTime = (s: number): string => {
   return `${m}:${String(sec).padStart(2, "0")}`;
 };
 
+// Human-readable duration: "35.4s" for short clips, "1m 9.9s" for minute-scale,
+// "1h 23m" for long sources. Rounds to one decimal of a second to avoid
+// floating-point artifacts like "69.89999999999998s".
+export const fmtDuration = (s: number): string => {
+  if (!isFinite(s) || s <= 0) return "0s";
+  const total = Math.round(s * 10) / 10;
+  if (total < 60) {
+    return Number.isInteger(total) ? `${total}s` : `${total.toFixed(1)}s`;
+  }
+  const mins = Math.floor(total / 60);
+  const remSec = Math.round((total - mins * 60) * 10) / 10;
+  if (mins < 60) {
+    if (remSec === 0) return `${mins}m`;
+    const secStr = Number.isInteger(remSec) ? `${remSec}s` : `${remSec.toFixed(1)}s`;
+    return `${mins}m ${secStr}`;
+  }
+  const hours = Math.floor(mins / 60);
+  const restMins = mins % 60;
+  return restMins === 0 ? `${hours}h` : `${hours}h ${restMins}m`;
+};
+
 export const fmtRelative = (ts: number): string => {
   const diff = Date.now() - ts;
   const m = Math.floor(diff / 60000);
@@ -65,10 +86,7 @@ export const generateClips = (projectId: string, count: number): Clip[] => {
     const start = cursor;
     cursor += dur + 60 + Math.floor(Math.random() * 600);
     const variants: Clip["variants"] = ["original"];
-    const r = Math.random();
-    if (r > 0.3) variants.push("captions");
-    if (r > 0.55) variants.push("reframe");
-    if (r > 0.75) variants.push("both");
+    if (Math.random() > 0.5) variants.push("reframe");
     arr.push({
       id: `${projectId}-c${i + 1}`,
       projectId,

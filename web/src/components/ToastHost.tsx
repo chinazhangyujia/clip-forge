@@ -20,7 +20,39 @@ export const ToastHost = () => {
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="toast-title">{t.title}</div>
-            {t.body && <div className="toast-body">{t.body}</div>}
+            {t.body && (
+              <div className="toast-body" style={{ wordBreak: "break-word" }}>
+                {t.body}
+              </div>
+            )}
+            {t.action && (
+              <button
+                onClick={() => {
+                  t.action?.onClick?.();
+                  dismissToast(t.id);
+                }}
+                style={{
+                  marginTop: 6,
+                  marginLeft: -8,
+                  padding: "3px 8px",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  borderRadius: 4,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  color:
+                    t.kind === "error"
+                      ? "var(--red)"
+                      : t.kind === "success"
+                        ? "oklch(0.42 0.13 155)"
+                        : "var(--accent)",
+                }}
+              >
+                {t.action.label}
+                <Icon name="chevron" size={11} />
+              </button>
+            )}
           </div>
           <button
             className="btn-ghost btn-sm btn-icon"

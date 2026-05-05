@@ -90,7 +90,7 @@ const JobsPopover = () => {
 };
 
 const ToastHost = () => {
-  const { toasts, dismissToast } = useStore();
+  const { toasts, dismissToast, pushToast } = useStore();
   return (
     <div className="toasts">
       {toasts.map(t => (
@@ -102,7 +102,33 @@ const ToastHost = () => {
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="toast-title">{t.title}</div>
-            {t.body && <div className="toast-body">{t.body}</div>}
+            {t.body && <div className="toast-body" style={{ wordBreak: 'break-word' }}>{t.body}</div>}
+            {t.action && (
+              <button
+                onClick={() => {
+                  if (t.action.onClick) t.action.onClick();
+                  if (t.action.retry) {
+                    pushToast({ kind: 'info', title: 'Retrying download…', duration: 2500 });
+                  }
+                  dismissToast(t.id);
+                }}
+                style={{
+                  marginTop: 6,
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: t.kind === 'error' ? 'var(--red)' : t.kind === 'success' ? 'oklch(0.42 0.13 155)' : 'var(--accent)',
+                  padding: '3px 8px',
+                  marginLeft: -8,
+                  borderRadius: 4,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                {t.action.label}
+                <Icon name="chevron" size={11}/>
+              </button>
+            )}
           </div>
           <button className="btn-ghost btn-sm btn-icon" onClick={() => dismissToast(t.id)} style={{ height: 22, width: 22, color: 'var(--fg-faint)' }}>
             <Icon name="x" size={14}/>

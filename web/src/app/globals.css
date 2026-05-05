@@ -70,6 +70,14 @@ a { color: inherit; text-decoration: none; }
   from { transform: translateX(20px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+@keyframes chipShimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+@keyframes chipFlashSuccess {
+  0% { box-shadow: 0 0 0 0 oklch(0.7 0.13 155 / 0.4); }
+  100% { box-shadow: 0 0 0 8px oklch(0.7 0.13 155 / 0); }
+}
 
 /* ---------- Buttons ---------- */
 .btn {

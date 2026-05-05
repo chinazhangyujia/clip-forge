@@ -107,20 +107,42 @@ const JobsPopover = () => {
                         {j.label}…
                       </div>
                     </div>
-                    <span className="mono" style={{ color: "var(--fg-muted)", fontSize: 12 }}>
-                      {Math.floor(j.progress)}%
-                    </span>
+                    {!j.indeterminate && (
+                      <span className="mono" style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                        {Math.floor(j.progress)}%
+                      </span>
+                    )}
                   </div>
-                  <div style={{ height: 4, background: "var(--bg-sunken)", borderRadius: 999, overflow: "hidden" }}>
-                    <div
-                      style={{
-                        height: "100%",
-                        width: `${j.progress}%`,
-                        background: "var(--accent)",
-                        borderRadius: 999,
-                        transition: "width .4s",
-                      }}
-                    />
+                  <div
+                    style={{
+                      height: 4,
+                      background: "var(--bg-sunken)",
+                      borderRadius: 999,
+                      overflow: "hidden",
+                      position: "relative",
+                    }}
+                  >
+                    {j.indeterminate ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          background:
+                            "linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%)",
+                          animation: "chipShimmer 1.4s ease-in-out infinite",
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${j.progress}%`,
+                          background: "var(--accent)",
+                          borderRadius: 999,
+                          transition: "width .4s",
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
               </Link>

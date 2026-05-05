@@ -5,7 +5,7 @@ Thumbs.db
 # Editors / tooling
 .vscode/
 .idea/
-.claude/
+.claude/settings.local.json
 *.swp
 *.swo
 
@@ -61,3 +61,8 @@ pnpm-debug.log*
 /media/
 /clips/
 /artifacts/
+
+# Local workspace (videos, transcripts, cuts, sliced clips, SQLite db).
+# Keep the directory itself tracked via .gitkeep.
+backend/data/**
+!backend/data/.gitkeep

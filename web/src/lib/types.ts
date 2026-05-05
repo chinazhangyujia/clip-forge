@@ -26,9 +26,14 @@ export type Project = {
   file: ProjectFile | null;
   prompt: string;
   pipeline: Pipeline;
+  pipelineError?: string | null;
 };
 
-export type ClipVariant = "original" | "captions" | "reframe" | "both";
+// Burned-in captions were dropped from MVP — the major social platforms
+// (TikTok, Douyin, Reels, Shorts) all ship native auto-caption with better
+// styling than we'd produce. Vertical reframe (9:16 instructor tracking) is
+// still planned, hence kept here as a placeholder variant.
+export type ClipVariant = "original" | "reframe";
 
 export type Clip = {
   id: string;
@@ -42,18 +47,32 @@ export type Clip = {
   hashtags: string[];
   hookText: string;
   thumbFrame: number;
+  original?: { startSec: number; endSec: number };
+  staleVariants?: ClipVariant[];
+  needsRender?: boolean;
 };
+
+export type JobStage = keyof Pipeline | "download";
 
 export type Job = {
   id: string;
   projectId: string;
   label: string;
-  stage: keyof Pipeline;
+  stage: JobStage;
   progress: number;
   status: "running" | "done" | "failed";
+  // Indeterminate jobs (e.g. download while ffmpeg runs synchronously and we
+  // have no progress telemetry) render the bar in shimmer mode instead of
+  // showing a width.
+  indeterminate?: boolean;
 };
 
 export type ToastKind = "info" | "success" | "error";
+
+export type ToastAction = {
+  label: string;
+  onClick?: () => void;
+};
 
 export type Toast = {
   id: string;
@@ -61,12 +80,17 @@ export type Toast = {
   title: string;
   body?: string;
   duration?: number;
+  action?: ToastAction;
 };
 
 export type TranscriptLine = { t: number; text: string };
 
+// What the backend's transcript.json artifact actually contains:
+// faster-whisper segments with absolute source-time start/end.
+export type TranscriptSegment = { start: number; end: number; text: string };
+
 export type ProjectDraft = {
   name: string;
   prompt: string;
-  file: ProjectFile | null;
+  file: File;
 };

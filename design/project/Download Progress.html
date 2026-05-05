@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>ClipForge</title>
+  <title>Download Progress — ClipForge</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -20,10 +20,7 @@
       0% { transform: translateX(-100%); }
       100% { transform: translateX(100%); }
     }
-    @keyframes chipFlashSuccess {
-      0% { box-shadow: 0 0 0 0 oklch(0.7 0.13 155 / 0.4); }
-      100% { box-shadow: 0 0 0 8px oklch(0.7 0.13 155 / 0); }
-    }
+    body { background: oklch(0.96 0.005 70); }
   </style>
 </head>
 <body>
@@ -33,15 +30,9 @@
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
-  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
   <script type="text/babel" src="core.jsx"></script>
-  <script type="text/babel" src="chrome.jsx"></script>
-  <script type="text/babel" src="screens/home.jsx"></script>
-  <script type="text/babel" src="screens/new.jsx"></script>
-  <script type="text/babel" src="screens/detail.jsx"></script>
-  <script type="text/babel" src="screens/trim.jsx"></script>
   <script type="text/babel" src="screens/download-flow.jsx"></script>
-  <script type="text/babel" src="screens/clip.jsx"></script>
-  <script type="text/babel" src="app.jsx"></script>
+  <script type="text/babel" src="download-states.jsx"></script>
 </body>
 </html>

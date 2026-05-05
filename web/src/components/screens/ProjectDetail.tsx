@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
-import { fmtRelative, fmtTime } from "@/lib/utils";
+import { api } from "@/lib/api";
+import { fmtDuration, fmtRelative, fmtTime } from "@/lib/utils";
 import { Icon, Spinner } from "@/lib/icons";
 import { StatusPill } from "@/components/StatusPill";
 import type { Clip, Pipeline, Project, ProjectFile, StageState } from "@/lib/types";
 
 export const ProjectDetail = ({ projectId }: { projectId: string }) => {
-  const { projects, clipsByProject, updateProject, pushToast } = useStore();
+  const { projects, clipsByProject, refreshProject, loadClips, updateProject, rerunProject, pushToast } =
+    useStore();
   const router = useRouter();
   const project = projects.find((p) => p.id === projectId);
 
@@ -19,6 +21,28 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   const [workingOpen, setWorkingOpen] = useState(false);
+
+  // Refresh the project once on mount so a deep-link reload sees current state.
+  useEffect(() => {
+    refreshProject(projectId);
+  }, [projectId, refreshProject]);
+
+  // Poll while the pipeline is running.
+  const projectStatus = project?.status;
+  useEffect(() => {
+    if (projectStatus !== "Processing") return;
+    const t = setInterval(() => {
+      refreshProject(projectId);
+    }, 2000);
+    return () => clearInterval(t);
+  }, [projectStatus, projectId, refreshProject]);
+
+  // Load clips whenever the project is in a state that has them.
+  useEffect(() => {
+    if (projectStatus === "Ready" || projectStatus === "Failed") {
+      loadClips(projectId);
+    }
+  }, [projectStatus, projectId, loadClips]);
 
   const startEditingName = () => {
     if (!project) return;
@@ -48,28 +72,24 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
 
   const clips = clipsByProject[project.id] || [];
 
-  const saveName = () => {
+  const saveName = async () => {
     setEditingName(false);
     if (nameDraft.trim() && nameDraft !== project.name) {
-      updateProject(project.id, { name: nameDraft.trim() });
+      await updateProject(project.id, { name: nameDraft.trim() });
       pushToast({ kind: "success", title: "Project renamed" });
     }
   };
 
-  const savePrompt = () => {
+  const savePrompt = async () => {
     setEditingPrompt(false);
     if (promptDraft !== project.prompt) {
-      updateProject(project.id, { prompt: promptDraft });
+      await updateProject(project.id, { prompt: promptDraft });
       pushToast({ kind: "success", title: "Prompt updated" });
     }
   };
 
-  const rerun = () => {
-    updateProject(project.id, {
-      status: "Processing",
-      pipeline: { transcribe: "running", cut: "queued", render: "queued", package: "queued" },
-    });
-    pushToast({ kind: "info", title: "Pipeline re-running", body: "Transcribing source again" });
+  const rerun = async () => {
+    await rerunProject(project.id);
   };
 
   return (
@@ -145,9 +165,53 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
         </div>
       </div>
 
+      {project.status === "Failed" && project.pipelineError && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 12,
+            padding: "12px 16px",
+            marginBottom: 20,
+            borderRadius: "var(--radius)",
+            border: "1px solid oklch(0.9 0.06 25)",
+            background: "oklch(0.97 0.04 25)",
+          }}
+        >
+          <span style={{ color: "var(--red)", flexShrink: 0, marginTop: 1 }}>
+            <Icon name="alert" size={16} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: "var(--fg)" }}>
+              Pipeline failed
+            </div>
+            <div
+              className="mono"
+              style={{
+                fontSize: 12,
+                color: "var(--fg-muted)",
+                marginTop: 4,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {project.pipelineError}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--fg-faint)", marginTop: 6 }}>
+              Hit{" "}
+              <span style={{ fontWeight: 500, color: "var(--fg-muted)" }}>
+                Re-run pipeline
+              </span>{" "}
+              once you&apos;ve fixed the issue. The transcript is cached, so re-runs
+              skip transcribing and start from the failed stage.
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 24, alignItems: "flex-start" }}>
         <aside style={{ position: "sticky", top: 80, display: "flex", flexDirection: "column", gap: 16 }}>
-          <SourceMaterials file={project.file} />
+          <SourceMaterials projectId={project.id} file={project.file} />
           <PromptCard
             project={project}
             editingPrompt={editingPrompt}
@@ -241,9 +305,22 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
   );
 };
 
-const SourceMaterials = ({ file }: { file: ProjectFile | null }) => (
+const SourceMaterials = ({
+  projectId,
+  file,
+}: {
+  projectId: string;
+  file: ProjectFile | null;
+}) => (
   <div className="card" style={{ overflow: "hidden" }}>
-    <div style={{ padding: "12px 14px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+    <div
+      style={{
+        padding: "12px 14px 10px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+      }}
+    >
       <div
         style={{
           fontSize: 11,
@@ -259,75 +336,34 @@ const SourceMaterials = ({ file }: { file: ProjectFile | null }) => (
         1 / 1
       </span>
     </div>
-    <div style={{ aspectRatio: "16 / 9", position: "relative", background: "oklch(0.18 0.02 60)" }}>
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "linear-gradient(135deg, oklch(0.32 0.06 280), oklch(0.22 0.05 260))",
-        }}
-      />
-      <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-        <button
+    <div
+      style={{
+        aspectRatio: "16 / 9",
+        position: "relative",
+        background: "oklch(0.08 0.005 60)",
+      }}
+    >
+      {file ? (
+        <video
+          src={api.sourceUrl(projectId)}
+          controls
+          playsInline
+          preload="metadata"
           style={{
-            width: 56,
-            height: 56,
-            borderRadius: 999,
-            background: "oklch(1 0 0 / 0.95)",
-            display: "grid",
-            placeItems: "center",
-            boxShadow: "var(--shadow-lg)",
-            color: "var(--fg)",
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            background: "black",
           }}
+        />
+      ) : (
+        <div
+          className="placeholder-img"
+          style={{ width: "100%", height: "100%" }}
         >
-          <span style={{ marginLeft: 3 }}>
-            <Icon name="play" size={20} />
-          </span>
-        </button>
-      </div>
-      <div
-        className="mono"
-        style={{
-          position: "absolute",
-          top: 10,
-          left: 10,
-          background: "oklch(0 0 0 / 0.55)",
-          color: "white",
-          padding: "3px 7px",
-          borderRadius: 4,
-          fontSize: 10,
-          letterSpacing: 0.04,
-        }}
-      >
-        VIDEO
-      </div>
-      <div
-        className="mono"
-        style={{
-          position: "absolute",
-          bottom: 10,
-          right: 10,
-          background: "oklch(0 0 0 / 0.6)",
-          color: "white",
-          padding: "3px 7px",
-          borderRadius: 4,
-          fontSize: 11,
-        }}
-      >
-        {file?.duration || "—"}
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: 3,
-          background: "oklch(1 0 0 / 0.15)",
-        }}
-      >
-        <div style={{ height: "100%", width: "32%", background: "var(--accent)" }} />
-      </div>
+          no source uploaded
+        </div>
+      )}
     </div>
     <div style={{ padding: "10px 14px", borderTop: "1px solid var(--border)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0" }}>
@@ -482,8 +518,8 @@ const PromptCard = ({
 
 const PipelineCard = ({ pipeline }: { pipeline: Pipeline }) => {
   const stages: { key: keyof Pipeline; label: string; sub: string }[] = [
-    { key: "transcribe", label: "Transcribe", sub: "Whisper-large" },
-    { key: "cut", label: "Cut", sub: "AI-driven boundaries" },
+    { key: "transcribe", label: "Transcribe", sub: "faster-whisper" },
+    { key: "cut", label: "Cut", sub: "Claude proposes boundaries" },
     { key: "render", label: "Render", sub: "Encode each clip" },
     { key: "package", label: "Package metadata", sub: "Titles, hashtags, hooks" },
   ];
@@ -583,9 +619,7 @@ const PipelineStage = ({
 
 const ClipCard = ({ clip, onClick }: { clip: Clip; onClick: () => void }) => {
   const [hover, setHover] = useState(false);
-  const hasCaptions = clip.variants.includes("captions") || clip.variants.includes("both");
-  const hasReframe = clip.variants.includes("reframe") || clip.variants.includes("both");
-  const hasBoth = clip.variants.includes("both");
+  const hasReframe = clip.variants.includes("reframe");
 
   return (
     <div
@@ -632,12 +666,10 @@ const ClipCard = ({ clip, onClick }: { clip: Clip; onClick: () => void }) => {
           <span className="mono">
             {fmtTime(clip.startSec)} – {fmtTime(clip.endSec)}
           </span>
-          <span className="mono">{clip.duration}s</span>
+          <span className="mono">{fmtDuration(clip.duration)}</span>
         </div>
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          <VariantChip active={hasCaptions} label="Captions" />
           <VariantChip active={hasReframe} label="Reframe" />
-          <VariantChip active={hasBoth} label="Both" />
         </div>
       </div>
     </div>
@@ -694,7 +726,7 @@ const ClipThumb = ({ clip, hover }: { clip: Clip; hover: boolean }) => {
           borderRadius: 3,
         }}
       >
-        {clip.duration}s
+        {fmtDuration(clip.duration)}
       </div>
       <div
         style={{
@@ -786,27 +818,40 @@ const seededSize = (id: string, base: number, range: number): string => {
 };
 
 const WorkingDir = ({ project, clips }: { project: Project; clips: Clip[] }) => {
-  type FileRow = { name: string; size: string; kind: "video" | "data" | "meta" };
+  type FileRow = {
+    name: string;
+    size: string;
+    kind: "video" | "data" | "meta";
+    href?: string;
+  };
+  const transcribeDone = project.pipeline.transcribe === "done";
+  const cutDone = project.pipeline.cut === "done";
   const files: FileRow[] = [
-    { name: "source.mp4", size: project.file?.size || "—", kind: "video" },
-    { name: "transcript.json", size: "2.4 MB", kind: "data" },
-    { name: "cuts.json", size: "14 KB", kind: "data" },
-    ...clips.slice(0, 3).map<FileRow>((c) => ({
+    {
+      name: project.file?.name ?? "source.mp4",
+      size: project.file?.size || "—",
+      kind: "video",
+    },
+    {
+      name: "transcript.json",
+      size: transcribeDone ? "ready" : "(pending)",
+      kind: "data",
+      href: transcribeDone ? api.artifactUrl(project.id, "transcript.json") : undefined,
+    },
+    {
+      name: "cuts.json",
+      size: cutDone ? "ready" : "(pending)",
+      kind: "data",
+      href: cutDone ? api.artifactUrl(project.id, "cuts.json") : undefined,
+    },
+    ...clips.slice(0, 5).map<FileRow>((c) => ({
       name: `clips/${c.id}.mp4`,
       size: `${seededSize(c.id, 8, 14)} MB`,
       kind: "video",
     })),
-    ...(clips.length > 3
-      ? [{ name: `clips/… +${clips.length - 3} more`, size: "", kind: "meta" as const }]
+    ...(clips.length > 5
+      ? [{ name: `clips/… +${clips.length - 5} more`, size: "", kind: "meta" as const }]
       : []),
-    ...clips
-      .slice(0, 2)
-      .filter((c) => c.variants.length > 1)
-      .map<FileRow>((c) => ({
-        name: `processed/${c.id}_captions.mp4`,
-        size: `${seededSize(c.id + "_cap", 12, 16)} MB`,
-        kind: "video",
-      })),
   ];
 
   return (
@@ -833,19 +878,33 @@ const WorkingDir = ({ project, clips }: { project: Project; clips: Clip[] }) => 
           }}
         >
           <span style={{ color: "var(--fg-faint)", flexShrink: 0 }}>
-            <Icon name={f.kind === "video" ? "video" : f.kind === "data" ? "file" : "folder"} size={13} />
+            <Icon
+              name={f.kind === "video" ? "video" : f.kind === "data" ? "file" : "folder"}
+              size={13}
+            />
           </span>
-          <span style={{ flex: 1, color: f.kind === "meta" ? "var(--fg-faint)" : "var(--fg)" }}>{f.name}</span>
+          <span style={{ flex: 1, color: f.kind === "meta" ? "var(--fg-faint)" : "var(--fg)" }}>
+            {f.name}
+          </span>
           {f.size && <span style={{ color: "var(--fg-faint)", fontSize: 11 }}>{f.size}</span>}
-          {f.kind !== "meta" && (
-            <button
+          {f.href ? (
+            <a
+              href={f.href}
+              target="_blank"
+              rel="noreferrer"
               className="btn-ghost"
-              style={{ padding: 4, color: "var(--fg-faint)", borderRadius: 4 }}
-              title="Download"
+              title="Open in new tab"
+              style={{
+                padding: 4,
+                color: "var(--fg-muted)",
+                borderRadius: 4,
+                textDecoration: "none",
+                display: "inline-flex",
+              }}
             >
-              <Icon name="download" size={13} />
-            </button>
-          )}
+              <Icon name="open" size={13} />
+            </a>
+          ) : null}
         </div>
       ))}
     </div>
