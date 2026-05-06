@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
 
-from .base import Cut, LlmProvider
+from .base import Cut, LlmProvider, dedupe_cuts
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +18,6 @@ log = logging.getLogger(__name__)
 CHUNK_THRESHOLD_SEC = 45 * 60
 CHUNK_DURATION_SEC = 30 * 60
 CHUNK_OVERLAP_SEC = 2 * 60
-DEDUP_PROXIMITY_SEC = 5.0
 
 # Anthropic Claude pricing (USD per 1M tokens). Update if rates change.
 # Source: https://www.anthropic.com/pricing — Sonnet 4.6 standard tier.
@@ -185,7 +184,7 @@ class ClaudeProvider(LlmProvider):
             total_cread += m.cache_read_tokens
             total_cost += m.cost_usd
 
-        deduped = _dedupe_cuts(all_cuts)
+        deduped = dedupe_cuts(all_cuts)
         log.info(
             "cut total: %d calls, %d in (%d cache_read, %d cache_write), %d out, "
             "$%.4f, %.1fs wall → %d cuts (%d after dedup)",
@@ -269,21 +268,3 @@ class ClaudeProvider(LlmProvider):
                 return out, metrics
 
         raise RuntimeError("Claude returned no propose_cuts tool_use block")
-
-
-def _dedupe_cuts(cuts: list[Cut]) -> list[Cut]:
-    """Drop near-duplicate cuts that came from chunk overlap regions.
-
-    Two cuts whose start times are within DEDUP_PROXIMITY_SEC are treated as
-    duplicates; we keep the longer one (better lead-in/lead-out coverage).
-    """
-    cuts = sorted(cuts, key=lambda c: c.start_sec)
-    out: list[Cut] = []
-    for c in cuts:
-        if out and abs(c.start_sec - out[-1].start_sec) < DEDUP_PROXIMITY_SEC:
-            prev = out[-1]
-            if (c.end_sec - c.start_sec) > (prev.end_sec - prev.start_sec):
-                out[-1] = c
-            continue
-        out.append(c)
-    return out

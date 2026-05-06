@@ -11,8 +11,18 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Which LLM provider handles cutting / packaging calls. "claude" is the US
+    # dev profile; "deepseek" is one of the China-prod-accessible options
+    # (Qwen / Kimi / GLM are TBD). Per-provider keys/models live below.
+    clipforge_llm_provider: str = "claude"
+
     anthropic_api_key: str = ""
-    clipforge_cutting_model: str = "claude-sonnet-4-6"
+    deepseek_api_key: str = ""
+
+    # Optional model override. If empty, the active provider picks its own
+    # default (Claude → claude-sonnet-4-6, DeepSeek → deepseek-v4-flash).
+    clipforge_cutting_model: str = ""
+
     clipforge_whisper_model: str = "base"
     clipforge_workspace_dir: str = ""
 
