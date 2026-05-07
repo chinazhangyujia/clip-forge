@@ -1,0 +1,13 @@
+# Force LF on shell scripts so Git-on-Windows (autocrlf) doesn't break
+# heredoc terminators / shebangs when CI checks the repo out.
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# Same for cross-platform config files where CRLF would break tooling.
+*.toml      text eol=lf
+*.json      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+
+# PyInstaller spec is read as Python.
+*.spec      text eol=lf

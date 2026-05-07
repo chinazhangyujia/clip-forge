@@ -59,6 +59,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install tauri-cli (provides `cargo tauri` subcommand)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2
+
       - name: Cache cargo registry + tauri target
         uses: actions/cache@v4
         with:
