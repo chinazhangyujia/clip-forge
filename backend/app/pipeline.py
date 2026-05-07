@@ -56,8 +56,18 @@ async def probe_duration_sec(source: Path) -> float:
         str(source),
     )
     if code != 0:
-        raise RuntimeError(f"ffprobe failed: {err.strip()}")
-    return float(out.strip())
+        size = source.stat().st_size if source.exists() else "missing"
+        raise RuntimeError(
+            f"ffprobe exit={code} for {source} (size={size}): "
+            f"stderr={err.strip()!r} stdout={out.strip()!r}"
+        )
+    try:
+        return float(out.strip())
+    except ValueError as e:
+        raise RuntimeError(
+            f"ffprobe stdout not a number for {source}: "
+            f"stdout={out.strip()!r} stderr={err.strip()!r}"
+        ) from e
 
 
 async def _source_path_for(project_id: str) -> Path:

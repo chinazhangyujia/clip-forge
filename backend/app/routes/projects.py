@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -16,6 +17,8 @@ from ..schemas import (
     clip_row_to_dto,
     project_row_to_dto,
 )
+
+log = logging.getLogger(__name__)
 
 ARTIFACT_MEDIA = {
     "transcript.json": "application/json",
@@ -82,10 +85,14 @@ async def create_project(
     try:
         duration_sec = await pipeline.probe_duration_sec(src_path)
     except Exception as e:
+        log.exception(
+            "ffprobe failed for project %s (uploaded %s bytes to %s, exists=%s)",
+            project_id, size_bytes, src_path, src_path.exists(),
+        )
         await bs.delete_prefix(project_prefix(project_id))
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"Could not read video metadata: {e}",
+            f"Could not read video metadata ({type(e).__name__}): {e}",
         ) from e
 
     now = _now_ms()
