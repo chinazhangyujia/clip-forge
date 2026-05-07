@@ -241,6 +241,11 @@ class DeepSeekProvider(LlmProvider):
         )
 
         t0 = time.monotonic()
+        # Disable thinking explicitly: deepseek-v4-flash defaults to thinking
+        # mode, which routes through the reasoner backend and rejects
+        # specific-function tool_choice with "deepseek-reasoner does not
+        # support this tool_choice". We don't need CoT for this task — just
+        # extract cut boundaries from the transcript and emit them as JSON.
         response = await self.client.chat.completions.create(
             model=self.model,
             max_tokens=8192,
@@ -250,6 +255,7 @@ class DeepSeekProvider(LlmProvider):
             ],
             tools=[CUTTING_TOOL],
             tool_choice={"type": "function", "function": {"name": "propose_cuts"}},
+            extra_body={"thinking": {"type": "disabled"}},
         )
         elapsed = time.monotonic() - t0
 
