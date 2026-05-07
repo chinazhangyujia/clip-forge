@@ -2,7 +2,7 @@
 const { useState, useEffect, useRef } = React;
 
 const NewProject = () => {
-  const { createProject, pushToast } = useStore();
+  const { createProject, pushToast, settings, pickFolder } = useStore();
   const { navigate } = useRouter();
   const [step, setStep] = useState(1);
   const [file, setFile] = useState(null);
@@ -11,6 +11,7 @@ const NewProject = () => {
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [activePreset, setActivePreset] = useState(null);
+  const [library, setLibrary] = useState(null); // null = use default; string = override
 
   const startFakeUpload = (f) => {
     setFile(f);
@@ -37,7 +38,7 @@ const NewProject = () => {
   const canNext = step === 1 ? (file && !uploading) : step === 2 ? (name.trim() && prompt.trim()) : true;
 
   const onFinish = () => {
-    const id = createProject({ name, prompt, file });
+    const id = createProject({ name, prompt, file, library: library || settings.defaultLibrary });
     pushToast({ kind: 'success', title: 'Project created', body: 'Processing has started' });
     navigate(`/projects/${id}`);
   };
@@ -73,7 +74,26 @@ const NewProject = () => {
           />
         )}
         {step === 3 && (
-          <Step3 file={file} name={name} prompt={prompt}/>
+          <Step3
+            file={file} name={name} prompt={prompt}
+            savingTo={library || settings.defaultLibrary}
+            usingDefault={!library}
+            onChangeFolder={() => {
+              const picked = pickFolder();
+              if (!picked) return;
+              if (Math.random() < 0.12) {
+                pushToast({
+                  kind: 'error',
+                  title: 'Can\u2019t write to that folder',
+                  body: `${picked} is read-only or missing permission. Pick a different folder.`,
+                });
+                return;
+              }
+              setLibrary(picked);
+              pushToast({ kind: 'success', title: 'Saving to a different folder for this project.' });
+            }}
+            onResetFolder={() => setLibrary(null)}
+          />
         )}
       </div>
 
@@ -318,7 +338,7 @@ const Step2 = ({ name, setName, prompt, setPrompt, activePreset, setActivePreset
   );
 };
 
-const Step3 = ({ file, name, prompt }) => {
+const Step3 = ({ file, name, prompt, savingTo, usingDefault, onChangeFolder, onResetFolder }) => {
   return (
     <div>
       <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.06, textTransform: 'uppercase', color: 'var(--fg-faint)', marginBottom: 12 }}>
@@ -328,11 +348,68 @@ const Step3 = ({ file, name, prompt }) => {
         {name || 'Untitled project'}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
         <SummaryRow label="Source material" value={file?.name || '—'} mono/>
         <SummaryRow label="Size" value={file?.size || '—'} mono/>
         <SummaryRow label="Duration" value={file?.duration || '—'} mono/>
         <SummaryRow label="Format" value="MP4 (H.264)" mono/>
+      </div>
+
+      <div style={{
+        padding: '12px 14px',
+        background: 'var(--bg-sunken)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        display: 'flex', alignItems: 'center', gap: 12,
+        marginBottom: 24,
+      }}>
+        <div style={{ flexShrink: 0, minWidth: 110 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.06, textTransform: 'uppercase', color: 'var(--fg-faint)', marginBottom: 2 }}>
+            Saving to
+          </div>
+          {!usingDefault && (
+            <button
+              onClick={onResetFolder}
+              className="btn-ghost"
+              style={{
+                fontSize: 10.5, color: 'var(--fg-faint)',
+                padding: '1px 4px', borderRadius: 4, marginLeft: -4,
+                letterSpacing: 0.02,
+              }}
+              title="Use the default workspace"
+            >
+              ↺ use default
+            </button>
+          )}
+        </div>
+        <div
+          style={{
+            flex: 1, minWidth: 0,
+            display: 'flex', alignItems: 'center', gap: 8,
+            color: 'var(--fg)',
+          }}
+          title={savingTo}
+        >
+          <span style={{ color: 'var(--fg-muted)', flexShrink: 0 }}>
+            <Icon name="folderThin" size={14}/>
+          </span>
+          <span
+            className="mono"
+            style={{
+              fontSize: 12.5,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              flex: 1, minWidth: 0,
+              direction: 'rtl', textAlign: 'left',
+            }}
+          >
+            {/* RTL trick gives middle-ellipsis behavior on overflow */}
+            <bdi style={{ direction: 'ltr', unicodeBidi: 'embed' }}>{savingTo}</bdi>
+          </span>
+        </div>
+        <button className="btn btn-sm btn-ghost" onClick={onChangeFolder} style={{ color: 'var(--fg-muted)' }}>
+          <Icon name="folderThin" size={13}/>
+          Change…
+        </button>
       </div>
 
       <div>

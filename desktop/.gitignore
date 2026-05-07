@@ -1,0 +1,18 @@
+# Build outputs
+build/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+src-tauri/Cargo.lock
+
+# Pre-downloaded whisper model — fetched by scripts/fetch-whisper.sh.
+# ~75 MB of binary weights; CI re-fetches on each build.
+build/whisper-base/
+build/whisper-fetch-cache/
+
+# Bundled native binaries — fetched by scripts/fetch-ffmpeg.sh, not committed.
+# (They're large and platform-specific; CI re-downloads on each build.)
+resources/mac/ffmpeg
+resources/mac/ffprobe
+resources/win/ffmpeg.exe
+resources/win/ffprobe.exe

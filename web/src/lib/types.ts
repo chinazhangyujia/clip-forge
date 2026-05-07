@@ -27,6 +27,22 @@ export type Project = {
   prompt: string;
   pipeline: Pipeline;
   pipelineError?: string | null;
+  // Library directory + per-project folder name. Currently the backend stores
+  // every project under a single shared workspace; these fields are populated
+  // client-side from the current default library + project.id until the
+  // backend tracks per-project library_dir.
+  library?: string;
+  folderId?: string;
+};
+
+export type Settings = {
+  // Where new projects are saved by default. Sourced from the Tauri shell's
+  // get_project_dir command in the desktop bundle; falls back to a stable
+  // placeholder string in plain `npm run dev`.
+  defaultLibrary: string;
+  // Whether `defaultLibrary` is currently usable (writable / mounted). Always
+  // true today — wire to a real probe when the backend exposes one.
+  libraryReachable: boolean;
 };
 
 // Burned-in captions were dropped from MVP — the major social platforms
@@ -93,4 +109,9 @@ export type ProjectDraft = {
   name: string;
   prompt: string;
   file: File;
+  // Optional per-project library override. Currently UI-only — the backend
+  // does not yet record library_dir per project, so files always land under
+  // the active workspace. Field carried so the override flows through the
+  // create-project plumbing once the backend is wired.
+  library?: string;
 };

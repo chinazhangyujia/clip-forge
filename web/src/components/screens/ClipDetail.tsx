@@ -171,7 +171,7 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
           Projects
         </Link>
         <span style={{ opacity: 0.5 }}>/</span>
-        <Link href={`/projects/${project.id}`} style={{ color: "var(--fg-muted)" }}>
+        <Link href={`/project?id=${project.id}`} style={{ color: "var(--fg-muted)" }}>
           {project.name}
         </Link>
         <span style={{ opacity: 0.5 }}>/</span>

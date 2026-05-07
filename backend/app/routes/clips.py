@@ -3,8 +3,8 @@ import time
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse
 
+from .. import _project_paths as pp
 from .. import pipeline
-from ..blobstore import clip_key, get_blobstore
 from ..datastore import get_datastore
 from ..schemas import Clip, ClipUpdate, clip_row_to_dto
 
@@ -58,12 +58,14 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
 @router.get("/{clip_id}/download")
 async def download_clip(clip_id: str) -> FileResponse:
     ds = get_datastore()
-    bs = get_blobstore()
     row = await ds.get_clip(clip_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
+    project = await ds.get_project(row.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
-    path = bs.local_path(clip_key(row.project_id, clip_id))
+    path = pp.clip_path(project, clip_id)
 
     if row.needs_render or not path.exists():
         try:

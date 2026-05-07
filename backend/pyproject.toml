@@ -38,3 +38,8 @@ select = ["E", "F", "W", "I", "B", "UP"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.20.0",
+]

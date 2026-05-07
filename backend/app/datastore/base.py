@@ -26,6 +26,10 @@ class ProjectRow(BaseModel):
     pipeline_render: str = "queued"
     pipeline_package: str = "queued"
     pipeline_error: str | None = None
+    # Parent directory the project's files live in (chosen at creation, locked
+    # for the project's lifetime). None for legacy projects → falls back to
+    # the global workspace_dir at path-resolution time.
+    library: str | None = None
     created_at: int
     updated_at: int
 

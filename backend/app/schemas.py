@@ -41,6 +41,9 @@ class Project(APIModel):
     prompt: str
     pipeline: PipelineState
     pipeline_error: str | None = None
+    # Parent directory of this project's files (chosen at creation). The
+    # frontend pairs it with `id` to form the full project folder path.
+    library: str | None = None
 
 
 class ClipOriginal(APIModel):
@@ -121,6 +124,7 @@ def project_row_to_dto(row: ProjectRow, clip_count: int) -> Project:
             package=row.pipeline_package,
         ),
         pipeline_error=row.pipeline_error,
+        library=row.library,
     )
 
 

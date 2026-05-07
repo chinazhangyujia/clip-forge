@@ -2,7 +2,7 @@
 const { useState, useEffect, useRef } = React;
 
 const ProjectDetail = ({ projectId }) => {
-  const { projects, clipsByProject, updateProject, pushToast } = useStore();
+  const { projects, clipsByProject, updateProject, pushToast, settings } = useStore();
   const { navigate } = useRouter();
   const project = projects.find(p => p.id === projectId);
   const [editingName, setEditingName] = useState(false);
@@ -109,7 +109,10 @@ const ProjectDetail = ({ projectId }) => {
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 24, alignItems: 'flex-start' }}>
         {/* Sidebar */}
         <aside style={{ position: 'sticky', top: 80, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <SourceMaterials file={project.file}/>
+          <SourceMaterials file={project.file} project={project} libraryReachable={settings.libraryReachable} onOpen={() => {
+            if (!settings.libraryReachable) return;
+            pushToast({ kind: 'info', title: 'Revealed in Finder', body: `${project.library}/${project.folderId}/` });
+          }}/>
           <PromptCard
             project={project}
             editingPrompt={editingPrompt}
@@ -175,8 +178,8 @@ const ProjectDetail = ({ projectId }) => {
               </span>
               <span style={{ color: 'var(--fg-muted)' }}><Icon name="folder" size={14}/></span>
               Working directory
-              <span className="mono" style={{ marginLeft: 'auto', color: 'var(--fg-faint)', fontSize: 11 }}>
-                /projects/{project.id}/
+              <span className="mono" style={{ marginLeft: 'auto', color: 'var(--fg-faint)', fontSize: 11, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'right' }} title={`${project.library}/${project.folderId}/`}>
+                <bdi style={{ direction: 'ltr', unicodeBidi: 'embed' }}>{project.library}/{project.folderId}/</bdi>
               </span>
             </button>
             {workingOpen && <WorkingDir project={project} clips={clips}/>}
@@ -187,7 +190,9 @@ const ProjectDetail = ({ projectId }) => {
   );
 };
 
-const SourceMaterials = ({ file }) => (
+const SourceMaterials = ({ file, project, libraryReachable, onOpen }) => {
+  const fullPath = project ? `${project.library}/${project.folderId}/` : '';
+  return (
   <div className="card" style={{ overflow: 'hidden' }}>
     <div style={{ padding: '12px 14px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
       <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.06, textTransform: 'uppercase', color: 'var(--fg-faint)' }}>
@@ -195,42 +200,62 @@ const SourceMaterials = ({ file }) => (
       </div>
       <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)' }}>1 / 1</span>
     </div>
-    <div style={{ aspectRatio: '16 / 9', position: 'relative', background: 'oklch(0.18 0.02 60)' }}>
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: 'linear-gradient(135deg, oklch(0.32 0.06 280), oklch(0.22 0.05 260))',
-      }}/>
-      <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
-        <button style={{
-          width: 56, height: 56, borderRadius: 999,
-          background: 'oklch(1 0 0 / 0.95)',
-          display: 'grid', placeItems: 'center',
-          boxShadow: 'var(--shadow-lg)',
-          color: 'var(--fg)',
+    <div style={{ aspectRatio: '16 / 9', position: 'relative', background: libraryReachable ? 'oklch(0.18 0.02 60)' : 'var(--bg-sunken)' }}>
+      {libraryReachable ? (
+        <>
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'linear-gradient(135deg, oklch(0.32 0.06 280), oklch(0.22 0.05 260))',
+          }}/>
+          <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
+            <button style={{
+              width: 56, height: 56, borderRadius: 999,
+              background: 'oklch(1 0 0 / 0.95)',
+              display: 'grid', placeItems: 'center',
+              boxShadow: 'var(--shadow-lg)',
+              color: 'var(--fg)',
+            }}>
+              <span style={{ marginLeft: 3 }}><Icon name="play" size={20}/></span>
+            </button>
+          </div>
+          <div className="mono" style={{
+            position: 'absolute', top: 10, left: 10,
+            background: 'oklch(0 0 0 / 0.55)',
+            color: 'white', padding: '3px 7px', borderRadius: 4,
+            fontSize: 10, letterSpacing: 0.04,
+          }}>
+            VIDEO
+          </div>
+          <div className="mono" style={{
+            position: 'absolute', bottom: 10, right: 10,
+            background: 'oklch(0 0 0 / 0.6)',
+            color: 'white', padding: '3px 7px', borderRadius: 4,
+            fontSize: 11,
+          }}>
+            {file?.duration || '—'}
+          </div>
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: 'oklch(1 0 0 / 0.15)' }}>
+            <div style={{ height: '100%', width: '32%', background: 'var(--accent)' }}/>
+          </div>
+        </>
+      ) : (
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          padding: 20, textAlign: 'center', gap: 10,
         }}>
-          <span style={{ marginLeft: 3 }}><Icon name="play" size={20}/></span>
-        </button>
-      </div>
-      <div className="mono" style={{
-        position: 'absolute', top: 10, left: 10,
-        background: 'oklch(0 0 0 / 0.55)',
-        color: 'white', padding: '3px 7px', borderRadius: 4,
-        fontSize: 10, letterSpacing: 0.04,
-      }}>
-        VIDEO
-      </div>
-      <div className="mono" style={{
-        position: 'absolute', bottom: 10, right: 10,
-        background: 'oklch(0 0 0 / 0.6)',
-        color: 'white', padding: '3px 7px', borderRadius: 4,
-        fontSize: 11,
-      }}>
-        {file?.duration || '—'}
-      </div>
-      {/* Fake scrubber */}
-      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: 'oklch(1 0 0 / 0.15)' }}>
-        <div style={{ height: '100%', width: '32%', background: 'var(--accent)' }}/>
-      </div>
+          <div style={{
+            width: 36, height: 36, borderRadius: 10,
+            background: 'oklch(0.97 0.04 75)', color: 'var(--amber)',
+            display: 'grid', placeItems: 'center',
+          }}>
+            <Icon name="warn" size={18}/>
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--fg-muted)', maxWidth: 240, lineHeight: 1.45 }}>
+            This project's files aren't available — reconnect the drive or remount the folder.
+          </div>
+        </div>
+      )}
     </div>
     {/* Material list */}
     <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
@@ -254,6 +279,52 @@ const SourceMaterials = ({ file }) => (
         </div>
       </div>
     </div>
+    {project && (
+      <div style={{
+        padding: '8px 10px 8px 14px',
+        borderTop: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', gap: 8,
+        background: 'var(--bg-sunken)',
+      }} title={fullPath}>
+        <span style={{ color: 'var(--fg-muted)', flexShrink: 0 }}>
+          <Icon name="folderThin" size={13}/>
+        </span>
+        <span
+          className="mono"
+          style={{
+            flex: 1, minWidth: 0,
+            fontSize: 11,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            color: libraryReachable ? 'var(--fg-muted)' : 'var(--fg-faint)',
+            textDecoration: libraryReachable ? 'none' : 'line-through',
+            direction: 'rtl', textAlign: 'left',
+          }}
+        >
+          <bdi style={{ direction: 'ltr', unicodeBidi: 'embed' }}>{fullPath}</bdi>
+        </span>
+        {!libraryReachable && (
+          <span title="Folder unreachable" style={{ color: 'var(--amber)', flexShrink: 0 }}>
+            <Icon name="warn" size={12}/>
+          </span>
+        )}
+        <button
+          className="btn-ghost"
+          onClick={libraryReachable ? onOpen : undefined}
+          title={libraryReachable ? 'Open in Finder' : 'Folder unreachable'}
+          style={{
+            width: 24, height: 24,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            borderRadius: 4,
+            color: libraryReachable ? 'var(--fg-muted)' : 'var(--fg-faint)',
+            cursor: libraryReachable ? 'pointer' : 'default',
+            opacity: libraryReachable ? 1 : 0.5,
+            flexShrink: 0,
+          }}
+        >
+          <Icon name="externalLink" size={12}/>
+        </button>
+      </div>
+    )}
     {/* Future: more materials */}
     <button
       title="Coming soon: add audio, slides, transcripts, or more videos"
@@ -277,7 +348,8 @@ const SourceMaterials = ({ file }) => (
       }}>SOON</span>
     </button>
   </div>
-);
+  );
+};
 
 const PromptCard = ({ project, editingPrompt, promptDraft, setPromptDraft, onEditPrompt, onSavePrompt, onCancelPrompt }) => (
   <div className="card" style={{ padding: 16 }}>

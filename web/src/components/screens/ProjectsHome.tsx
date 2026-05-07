@@ -54,7 +54,7 @@ export const ProjectsHome = () => {
               isHover={hoverId === p.id}
               onEnter={() => setHoverId(p.id)}
               onLeave={() => setHoverId(null)}
-              onOpen={() => router.push(`/projects/${p.id}`)}
+              onOpen={() => router.push(`/project?id=${p.id}`)}
               onDelete={() => setConfirmId(p.id)}
             />
           ))}

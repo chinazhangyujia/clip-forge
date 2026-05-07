@@ -1,6 +1,6 @@
 # Claude project notes — ClipForge
 
-This is a monorepo with a Python FastAPI backend (`backend/`) and a TypeScript Next.js frontend (`web/`).
+This is a monorepo with a Python FastAPI backend (`backend/`), a TypeScript Next.js frontend (`web/`), and a Tauri desktop shell (`desktop/`) that bundles them into a single `.dmg` / `.msi` installer.
 
 ## Primary specification
 
@@ -20,6 +20,19 @@ See [requirements.md](./requirements.md) for the full MVP scope and architectura
 - `make lint` — lint both backend and web
 
 See `Makefile` for the full target list.
+
+## Desktop bundle
+
+For the dogfood-on-Windows-and-Mac flow, the `desktop/` folder packages a
+Tauri 2 shell + PyInstaller-bundled FastAPI + static ffmpeg into one
+double-clickable installer. See [`desktop/README.md`](./desktop/README.md)
+for full details.
+
+Quick paths:
+- **Local Mac build:** `bash desktop/scripts/build.sh` — produces a `.dmg`
+- **CI both-platforms build:** push to `main`, Actions runs `.github/workflows/build-desktop.yml`
+- **Frontend changes for static export:** the `web/` build uses `output: "export"` and ships as static HTML/JS inside the Tauri WebView. Routes must be either fully static (`/projects/new`) or read runtime IDs from query params (`/project?id=X`, `/clip?project=X&clip=Y`) — Next App Router static export does not support runtime-known dynamic segments.
+- **Backend desktop entry:** `backend/app/desktop_entry.py` is the PyInstaller script entry. It accepts `--data-dir`, `--port`, `--ffmpeg-dir`. Tauri spawns it and reads `CLIPFORGE_PORT=<n>` from stdout.
 
 ## Tooling notes
 

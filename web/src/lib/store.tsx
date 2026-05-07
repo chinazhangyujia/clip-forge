@@ -10,13 +10,14 @@ import {
   type ReactNode,
 } from "react";
 import { api } from "./api";
-import type { Clip, Job, Project, ProjectDraft, Toast } from "./types";
+import type { Clip, Job, Project, ProjectDraft, Settings, Toast } from "./types";
 
 type StoreValue = {
   projects: Project[];
   clipsByProject: Record<string, Clip[]>;
   jobs: Job[];
   toasts: Toast[];
+  settings: Settings;
 
   loadProjects: () => Promise<void>;
   refreshProject: (id: string) => Promise<Project | null>;
@@ -47,6 +48,12 @@ type StoreValue = {
   addJob: (job: Job) => void;
   updateJob: (id: string, patch: Partial<Job>) => void;
   removeJob: (id: string) => void;
+
+  // Settings — opens a native folder picker via the Tauri shell. Resolves to
+  // the chosen path, or null if the user cancelled. In `npm run dev` (no
+  // Tauri), returns null and shows a toast (folder picking only works inside
+  // the desktop app).
+  pickFolder: () => Promise<string | null>;
 };
 
 const StoreCtx = createContext<StoreValue | null>(null);
@@ -89,11 +96,23 @@ const projectsToJobs = (projects: Project[]): Job[] => {
     });
 };
 
+// Detect Tauri once. The IPC bridge is only available inside the desktop
+// shell; outside we keep the picker as a no-op + toast.
+const inTauri = (): boolean =>
+  typeof window !== "undefined" &&
+  Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+
+const FALLBACK_LIBRARY = "~/Library/Application Support/com.clipforge.app/projects";
+
 export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [clipsByProject, setClipsByProject] = useState<Record<string, Clip[]>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [extraJobs, setExtraJobs] = useState<Job[]>([]);
+  const [settings, setSettings] = useState<Settings>({
+    defaultLibrary: FALLBACK_LIBRARY,
+    libraryReachable: true,
+  });
 
   const addJob = useCallback<StoreValue["addJob"]>((job) => {
     setExtraJobs((cur) => [...cur, job]);
@@ -166,7 +185,12 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const createProject = useCallback<StoreValue["createProject"]>(
     async (draft, onProgress) => {
       const p = await api.createProject(
-        { name: draft.name, prompt: draft.prompt, file: draft.file },
+        {
+          name: draft.name,
+          prompt: draft.prompt,
+          file: draft.file,
+          library: draft.library,
+        },
         onProgress,
       );
       setProjects((cur) => [p, ...cur.filter((x) => x.id !== p.id)]);
@@ -282,6 +306,53 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
     loadProjects();
   }, [loadProjects]);
 
+  // On mount inside Tauri, read the current default library from the shell
+  // so the Settings popover and Saving-to row reflect reality.
+  useEffect(() => {
+    if (!inTauri()) return;
+    let mounted = true;
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const dir = await invoke<string>("get_project_dir");
+        if (mounted) {
+          setSettings((s) => ({ ...s, defaultLibrary: dir }));
+        }
+      } catch (e) {
+        console.error("get_project_dir failed", e);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const pickFolder = useCallback<StoreValue["pickFolder"]>(async () => {
+    if (!inTauri()) {
+      pushToast({
+        kind: "info",
+        title: "Folder picker only works in the desktop app",
+        body: "Run the bundled ClipForge.app to change the workspace.",
+      });
+      return null;
+    }
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const picked = await invoke<string | null>("pick_project_dir");
+      if (picked) {
+        setSettings((s) => ({ ...s, defaultLibrary: picked }));
+      }
+      return picked;
+    } catch (e) {
+      pushToast({
+        kind: "error",
+        title: "Couldn't open folder picker",
+        body: String(e instanceof Error ? e.message : e),
+      });
+      return null;
+    }
+  }, [pushToast]);
+
   const jobs = useMemo(
     () => [...projectsToJobs(projects), ...extraJobs],
     [projects, extraJobs],
@@ -293,6 +364,7 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
       clipsByProject,
       jobs,
       toasts,
+      settings,
       loadProjects,
       refreshProject,
       loadClips,
@@ -307,12 +379,14 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
       addJob,
       updateJob,
       removeJob,
+      pickFolder,
     }),
     [
       projects,
       clipsByProject,
       jobs,
       toasts,
+      settings,
       loadProjects,
       refreshProject,
       loadClips,
@@ -327,6 +401,7 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
       addJob,
       updateJob,
       removeJob,
+      pickFolder,
     ],
   );
 

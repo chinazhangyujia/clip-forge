@@ -35,7 +35,10 @@ app = FastAPI(title="ClipForge", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    # Origins: Next dev server (web profile), and the Tauri WebView's custom
+    # protocol on macOS/Windows. The backend binds to 127.0.0.1 so external
+    # traffic can't reach it regardless.
+    allow_origin_regex=r"^(http://localhost(:\d+)?|https?://tauri\.localhost|tauri://localhost)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

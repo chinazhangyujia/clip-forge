@@ -1,18 +1,144 @@
-/* global React, Icon, Spinner, useStore, useRouter, Link, fmtTime */
+/* global React, Icon, Spinner, useStore, useRouter, Link, fmtTime, truncatePath */
 const { useState, useEffect, useRef } = React;
 
+const PathDisplay = ({ path, reachable, maxLen = 38, style }) => {
+  const display = truncatePath(path, maxLen);
+  return (
+    <span
+      title={path}
+      className="mono"
+      style={{
+        fontSize: 12,
+        color: reachable === false ? 'var(--fg-faint)' : 'var(--fg)',
+        textDecoration: reachable === false ? 'line-through' : 'none',
+        wordBreak: 'break-all',
+        ...style,
+      }}
+    >
+      {display}
+    </span>
+  );
+};
+
+const SettingsPopover = ({ onClose }) => {
+  const { settings, setDefaultLibrary, setLibraryReachable, pickFolder, pushToast } = useStore();
+
+  const onChange = () => {
+    const picked = pickFolder();
+    if (!picked) return; // user canceled
+    // Simulate ~12% chance the picked folder is unwritable.
+    if (Math.random() < 0.12) {
+      pushToast({
+        kind: 'error',
+        title: 'Can\u2019t write to that folder',
+        body: `${picked} is read-only or missing permission. Pick a different folder.`,
+      });
+      return;
+    }
+    setDefaultLibrary(picked);
+    pushToast({ kind: 'success', title: 'Default workspace updated.' });
+  };
+
+  return (
+    <div className="popover" style={{ width: 360 }}>
+      <div className="popover-head">
+        <span>Settings</span>
+        <button
+          className="btn-ghost"
+          onClick={() => setLibraryReachable(!settings.libraryReachable)}
+          title="Toggle reachable (demo)"
+          style={{
+            fontSize: 10, color: 'var(--fg-faint)', padding: '2px 6px',
+            borderRadius: 4, letterSpacing: 0.04, textTransform: 'none',
+          }}
+        >
+          {settings.libraryReachable ? 'reachable' : 'unreachable'}
+        </button>
+      </div>
+      <div style={{ padding: 16 }}>
+        <div style={{
+          fontSize: 11, fontWeight: 600, letterSpacing: 0.06,
+          textTransform: 'uppercase', color: 'var(--fg-faint)', marginBottom: 4,
+        }}>
+          Default workspace
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--fg-muted)', marginBottom: 12 }}>
+          Where new projects are saved.
+        </div>
+
+        <div
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8,
+            padding: '10px 12px',
+            background: 'var(--bg-sunken)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            marginBottom: 12,
+          }}
+        >
+          <span style={{ color: 'var(--fg-muted)', flexShrink: 0, marginTop: 1 }}>
+            <Icon name="folderThin" size={14}/>
+          </span>
+          <span
+            className="mono"
+            title={settings.defaultLibrary}
+            style={{
+              fontSize: 12, lineHeight: 1.45,
+              color: settings.libraryReachable ? 'var(--fg)' : 'var(--fg-faint)',
+              textDecoration: settings.libraryReachable ? 'none' : 'line-through',
+              wordBreak: 'break-all',
+              flex: 1, minWidth: 0,
+            }}
+          >
+            {settings.defaultLibrary}
+          </span>
+          {!settings.libraryReachable && (
+            <span title="This folder isn't reachable" style={{ color: 'var(--amber)', flexShrink: 0, marginTop: 1 }}>
+              <Icon name="warn" size={14}/>
+            </span>
+          )}
+        </div>
+
+        <button className="btn" onClick={onChange} style={{ width: '100%', justifyContent: 'center' }}>
+          <Icon name="folderThin" size={14}/>
+          Change folder…
+        </button>
+
+        <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+          Existing projects stay in their current location. Only new projects use the new default.
+        </div>
+      </div>
+    </div>
+  );
+};
+
+Object.assign(window, { PathDisplay, SettingsPopover });
+
 const TopNav = ({ crumbs }) => {
-  const { jobs } = useStore();
+  const { jobs, settings } = useStore();
   const [open, setOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const ref = useRef(null);
+  const settingsRef = useRef(null);
   const running = jobs.filter(j => j.status === 'running');
 
   useEffect(() => {
     const onClick = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (settingsRef.current && !settingsRef.current.contains(e.target)) setSettingsOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        setSettingsOpen(false);
+      }
     };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, []);
 
   return (
@@ -33,8 +159,39 @@ const TopNav = ({ crumbs }) => {
         </nav>
       )}
       <div className="spacer"/>
+      <div ref={settingsRef} style={{ position: 'relative' }}>
+        <button
+          className="btn-ghost"
+          onClick={() => { setSettingsOpen(o => !o); setOpen(false); }}
+          title="Settings"
+          aria-label="Settings"
+          style={{
+            width: 32, height: 32,
+            borderRadius: 999,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            color: settingsOpen ? 'var(--fg)' : 'var(--fg-muted)',
+            background: settingsOpen ? 'var(--bg-sunken)' : 'transparent',
+            border: '1px solid transparent',
+            position: 'relative',
+          }}
+        >
+          <Icon name="gear" size={16}/>
+          {!settings?.libraryReachable && (
+            <span
+              title="Default workspace isn't reachable"
+              style={{
+                position: 'absolute', top: 4, right: 4,
+                width: 7, height: 7, borderRadius: 999,
+                background: 'var(--amber)',
+                border: '1.5px solid var(--bg-elev)',
+              }}
+            />
+          )}
+        </button>
+        {settingsOpen && <SettingsPopover onClose={() => setSettingsOpen(false)}/>}
+      </div>
       <div ref={ref} style={{ position: 'relative' }}>
-        <button className="jobs-trigger" onClick={() => setOpen(o => !o)}>
+        <button className="jobs-trigger" onClick={() => { setOpen(o => !o); setSettingsOpen(false); }}>
           {running.length > 0 ? <span className="pulse"/> : <span style={{width:7, height:7, borderRadius:999, background:'var(--border-strong)'}}/>}
           <span>Jobs</span>
           <span className="jobs-count">{running.length}</span>

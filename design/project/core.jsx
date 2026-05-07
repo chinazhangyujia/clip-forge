@@ -34,6 +34,10 @@ const Icon = ({ name, size = 16, ...rest }) => {
     grid: <><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></>,
     moreH: <><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></>,
     search: <><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></>,
+    gear: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></>,
+    folderThin: <path d="M3 7.5a1.5 1.5 0 0 1 1.5-1.5h4l1.5 1.5h9.5a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5h-15a1.5 1.5 0 0 1-1.5-1.5z"/>,
+    warn: <><path d="M12 3L2 20h20L12 3z"/><path d="M12 10v5"/><path d="M12 18h.01"/></>,
+    externalLink: <><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></>,
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...rest}>
@@ -77,6 +81,8 @@ const PROMPT_PRESETS = {
   "Hook-first short clips": "Cut into 20–45 second clips. Each clip must open with a strong hook — a surprising claim, a question, or a contrarian take. Trim aggressively for pace. Prioritize moments with strong vocal energy.",
 };
 
+const DEFAULT_LIBRARY_SEED = '/Users/maya/ClipForge/Library';
+
 const initialProjects = () => ([
   {
     id: 'p1',
@@ -88,6 +94,8 @@ const initialProjects = () => ([
     prompt: PROMPT_PRESETS["Hook-first short clips"],
     pipeline: { transcribe: 'done', cut: 'done', render: 'done', package: 'done' },
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 2,
+    library: DEFAULT_LIBRARY_SEED,
+    folderId: 'p_a14b9e02',
   },
   {
     id: 'p2',
@@ -99,6 +107,8 @@ const initialProjects = () => ([
     prompt: PROMPT_PRESETS["Q&A moments"],
     pipeline: { transcribe: 'done', cut: 'running', render: 'queued', package: 'queued' },
     createdAt: Date.now() - 1000 * 60 * 60 * 6,
+    library: '/Volumes/External SSD/clipforge',
+    folderId: 'p_3f7c1d50',
   },
   {
     id: 'p3',
@@ -110,6 +120,8 @@ const initialProjects = () => ([
     prompt: '',
     pipeline: { transcribe: 'queued', cut: 'queued', render: 'queued', package: 'queued' },
     createdAt: Date.now() - 1000 * 60 * 60 * 22,
+    library: DEFAULT_LIBRARY_SEED,
+    folderId: 'p_88c2ee41',
   },
   {
     id: 'p4',
@@ -121,6 +133,8 @@ const initialProjects = () => ([
     prompt: PROMPT_PRESETS["Tutorial highlights"],
     pipeline: { transcribe: 'done', cut: 'failed', render: 'queued', package: 'queued' },
     createdAt: Date.now() - 1000 * 60 * 60 * 36,
+    library: DEFAULT_LIBRARY_SEED,
+    folderId: 'p_5d99a217',
   },
   {
     id: 'p5',
@@ -132,6 +146,8 @@ const initialProjects = () => ([
     prompt: PROMPT_PRESETS["Q&A moments"],
     pipeline: { transcribe: 'done', cut: 'done', render: 'done', package: 'done' },
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 5,
+    library: DEFAULT_LIBRARY_SEED,
+    folderId: 'p_b620e3f8',
   },
   {
     id: 'p6',
@@ -143,6 +159,8 @@ const initialProjects = () => ([
     prompt: PROMPT_PRESETS["Tutorial highlights"],
     pipeline: { transcribe: 'done', cut: 'done', render: 'done', package: 'done' },
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 9,
+    library: DEFAULT_LIBRARY_SEED,
+    folderId: 'p_c4f1071d',
   },
 ]);
 
@@ -211,8 +229,52 @@ const fmtRelative = (ts) => {
   return `${d}d ago`;
 };
 
+/* ---------- Workspace path helpers ---------- */
+const DEFAULT_LIBRARY = '/Users/maya/ClipForge/Library';
+
+// Sample folders the fake "OS folder picker" cycles through, so the user can see
+// the UI handle a few different shapes (short, long, external drive).
+const FAKE_PICK_FOLDERS = [
+  '/Volumes/External SSD/clipforge',
+  '/Users/maya/Movies/ClipForge',
+  '/Volumes/Drobo/Studio/Recordings/Course Material/2026 Q2/clipforge-library',
+  '/Users/maya/Desktop/Workspace/cf',
+];
+
+const truncatePath = (path, max = 40) => {
+  if (!path || path.length <= max) return path;
+  const head = path.slice(0, Math.ceil(max / 2) - 2);
+  const tail = path.slice(-(Math.floor(max / 2) - 2));
+  return `${head}…${tail}`;
+};
+
+const projectFolderId = (id) => `p_${id.replace(/^p/, '').padEnd(8, '0').slice(0, 8)}`;
+
+Object.assign(window, { DEFAULT_LIBRARY, FAKE_PICK_FOLDERS, truncatePath, projectFolderId });
+
 const StoreProvider = ({ children }) => {
   const [projects, setProjects] = useState(initialProjects);
+  const [settings, setSettings] = useState({
+    defaultLibrary: DEFAULT_LIBRARY,
+    libraryReachable: true,
+  });
+  const pickCursorRef = useRef(0);
+
+  const pickFolder = useCallback(() => {
+    // Simulate native folder picker. ~70% of the time returns a fresh path,
+    // small chance returns null (user canceled).
+    if (Math.random() < 0.12) return null;
+    const idx = pickCursorRef.current % FAKE_PICK_FOLDERS.length;
+    pickCursorRef.current += 1;
+    return FAKE_PICK_FOLDERS[idx];
+  }, []);
+
+  const setDefaultLibrary = useCallback((path) => {
+    setSettings(s => ({ ...s, defaultLibrary: path, libraryReachable: true }));
+  }, []);
+  const setLibraryReachable = useCallback((reachable) => {
+    setSettings(s => ({ ...s, libraryReachable: reachable }));
+  }, []);
   const [clipsByProject, setClipsByProject] = useState(() => ({
     p1: generateClips('p1', 14),
     p2: generateClips('p2', 6),
@@ -252,6 +314,7 @@ const StoreProvider = ({ children }) => {
 
   const createProject = useCallback((draft) => {
     const id = 'p' + Math.random().toString(36).slice(2, 7);
+    const folderId = 'p_' + Math.random().toString(36).slice(2, 10);
     const proj = {
       id,
       name: draft.name,
@@ -262,6 +325,8 @@ const StoreProvider = ({ children }) => {
       file: draft.file,
       prompt: draft.prompt,
       pipeline: { transcribe: 'running', cut: 'queued', render: 'queued', package: 'queued' },
+      library: draft.library || DEFAULT_LIBRARY,
+      folderId,
     };
     setProjects(ps => [proj, ...ps]);
     setJobs(js => [...js, { id: 'j' + id, projectId: id, label: 'Transcribing', stage: 'transcribe', progress: 5, status: 'running' }]);
@@ -311,7 +376,8 @@ const StoreProvider = ({ children }) => {
     clipsByProject, setClipsByProject,
     jobs, setJobs,
     toasts, pushToast, dismissToast,
-  }), [projects, clipsByProject, jobs, toasts, updateProject, deleteProject, createProject, pushToast, dismissToast]);
+    settings, setDefaultLibrary, setLibraryReachable, pickFolder,
+  }), [projects, clipsByProject, jobs, toasts, settings, updateProject, deleteProject, createProject, pushToast, dismissToast, setDefaultLibrary, setLibraryReachable, pickFolder]);
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 };

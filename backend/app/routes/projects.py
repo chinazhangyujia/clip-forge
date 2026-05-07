@@ -1,14 +1,13 @@
 import logging
 import time
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
+from .. import _project_paths as pp
 from .. import jobs, pipeline
-from ..blobstore import get_blobstore, project_prefix, source_key
 from ..datastore import ProjectRow, get_datastore
 from ..schemas import (
     Clip,
@@ -59,6 +58,7 @@ async def create_project(
     name: Annotated[str, Form()],
     prompt: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
+    library: Annotated[str | None, Form()] = None,
 ) -> Project:
     if not name.strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "name is required")
@@ -68,20 +68,23 @@ async def create_project(
     project_id = _new_project_id()
     src_filename = Path(file.filename or "source.mp4").name
     ext = Path(src_filename).suffix.lower() or ".mp4"
+    library_dir = (library or "").strip() or None
 
-    bs = get_blobstore()
     ds = get_datastore()
 
-    async def chunks() -> AsyncIterator[bytes]:
+    # Stream the upload directly into the project's source file. We bypass the
+    # blobstore here because the path depends on the per-project library, not
+    # the global workspace root.
+    src_path = pp.source_path_raw(library_dir, project_id, ext)
+    size_bytes = 0
+    with src_path.open("wb") as out:
         while True:
             chunk = await file.read(1024 * 1024)
             if not chunk:
                 break
-            yield chunk
+            out.write(chunk)
+            size_bytes += len(chunk)
 
-    size_bytes = await bs.upload_stream(source_key(project_id, ext), chunks())
-
-    src_path = bs.local_path(source_key(project_id, ext))
     try:
         duration_sec = await pipeline.probe_duration_sec(src_path)
     except Exception as e:
@@ -89,7 +92,7 @@ async def create_project(
             "ffprobe failed for project %s (uploaded %s bytes to %s, exists=%s)",
             project_id, size_bytes, src_path, src_path.exists(),
         )
-        await bs.delete_prefix(project_prefix(project_id))
+        pp.delete_project_dir(library_dir, project_id)
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"Could not read video metadata ({type(e).__name__}): {e}",
@@ -104,6 +107,7 @@ async def create_project(
         source_filename=src_filename,
         source_size_bytes=size_bytes,
         source_duration_sec=duration_sec,
+        library=library_dir,
         created_at=now,
         updated_at=now,
     )
@@ -161,12 +165,11 @@ async def rerun_project(project_id: str) -> Project:
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(project_id: str) -> None:
     ds = get_datastore()
-    bs = get_blobstore()
     existing = await ds.get_project(project_id)
     if existing is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
     await ds.delete_project(project_id)
-    await bs.delete_prefix(project_prefix(project_id))
+    pp.delete_project_dir(existing.library, project_id)
 
 
 @router.get(
@@ -188,7 +191,6 @@ async def get_source(project_id: str) -> FileResponse:
     even for multi-GB sources. FastAPI's FileResponse handles range
     requests natively (Starlette ≥0.36)."""
     ds = get_datastore()
-    bs = get_blobstore()
     project = await ds.get_project(project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
@@ -196,10 +198,10 @@ async def get_source(project_id: str) -> FileResponse:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Source not yet uploaded"
         )
-    ext = Path(project.source_filename).suffix.lower() or ".mp4"
-    path = bs.local_path(source_key(project_id, ext))
+    path = pp.source_path(project)
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Source file missing")
+    ext = path.suffix.lower()
     media = "video/mp4"
     if ext == ".mov":
         media = "video/quicktime"
@@ -218,11 +220,19 @@ async def get_artifact(project_id: str, name: str) -> FileResponse:
             status.HTTP_400_BAD_REQUEST,
             f"Unknown artifact {name!r}. Allowed: {sorted(ARTIFACT_MEDIA)}",
         )
-    bs = get_blobstore()
-    blob_key = f"{project_id}/{name}"
-    if not await bs.exists(blob_key):
+    ds = get_datastore()
+    project = await ds.get_project(project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    if name == "transcript.json":
+        path = pp.transcript_path(project)
+    elif name == "cuts.json":
+        path = pp.cuts_path(project)
+    else:  # unreachable — ARTIFACT_MEDIA whitelist is the source of truth
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown artifact {name!r}")
+    if not path.exists():
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             f"{name} not yet generated for this project",
         )
-    return FileResponse(bs.local_path(blob_key), media_type=ARTIFACT_MEDIA[name])
+    return FileResponse(path, media_type=ARTIFACT_MEDIA[name])

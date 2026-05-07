@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { ApiInitGate } from "@/lib/api-init";
 import { StoreProvider } from "@/lib/store";
 import { TopNav } from "@/components/TopNav";
 import { ToastHost } from "@/components/ToastHost";
@@ -28,13 +29,15 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${jetbrains.variable}`}>
       <body>
-        <StoreProvider>
-          <div className="app">
-            <TopNav />
-            {children}
-            <ToastHost />
-          </div>
-        </StoreProvider>
+        <ApiInitGate>
+          <StoreProvider>
+            <div className="app">
+              <TopNav />
+              {children}
+              <ToastHost />
+            </div>
+          </StoreProvider>
+        </ApiInitGate>
       </body>
     </html>
   );

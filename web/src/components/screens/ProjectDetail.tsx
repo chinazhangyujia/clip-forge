@@ -11,7 +11,7 @@ import { StatusPill } from "@/components/StatusPill";
 import type { Clip, Pipeline, Project, ProjectFile, StageState } from "@/lib/types";
 
 export const ProjectDetail = ({ projectId }: { projectId: string }) => {
-  const { projects, clipsByProject, refreshProject, loadClips, updateProject, rerunProject, pushToast } =
+  const { projects, clipsByProject, refreshProject, loadClips, updateProject, rerunProject, pushToast, settings } =
     useStore();
   const router = useRouter();
   const project = projects.find((p) => p.id === projectId);
@@ -211,7 +211,32 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
 
       <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 24, alignItems: "flex-start" }}>
         <aside style={{ position: "sticky", top: 80, display: "flex", flexDirection: "column", gap: 16 }}>
-          <SourceMaterials projectId={project.id} file={project.file} />
+          <SourceMaterials
+            projectId={project.id}
+            file={project.file}
+            project={project}
+            libraryReachable={settings.libraryReachable}
+            settings={settings}
+            onOpen={async () => {
+              const lib = project.library ?? settings.defaultLibrary;
+              const folderId = project.folderId ?? project.id;
+              const fullPath = `${lib}/${folderId}/`;
+              try {
+                await navigator.clipboard.writeText(fullPath);
+                pushToast({
+                  kind: "success",
+                  title: "Path copied",
+                  body: "Paste into Finder (⌘⇧G) or File Explorer's address bar.",
+                });
+              } catch {
+                pushToast({
+                  kind: "info",
+                  title: "Project folder",
+                  body: fullPath,
+                });
+              }
+            }}
+          />
           <PromptCard
             project={project}
             editingPrompt={editingPrompt}
@@ -256,7 +281,7 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
               {clips.map((c) => (
-                <ClipCard key={c.id} clip={c} onClick={() => router.push(`/projects/${project.id}/clips/${c.id}`)} />
+                <ClipCard key={c.id} clip={c} onClick={() => router.push(`/clip?project=${project.id}&clip=${c.id}`)} />
               ))}
             </div>
           )}
@@ -293,8 +318,24 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
                 <Icon name="folder" size={14} />
               </span>
               Working directory
-              <span className="mono" style={{ marginLeft: "auto", color: "var(--fg-faint)", fontSize: 11 }}>
-                /projects/{project.id}/
+              <span
+                className="mono"
+                title={`${project.library ?? settings.defaultLibrary}/${project.folderId ?? project.id}/`}
+                style={{
+                  marginLeft: "auto",
+                  color: "var(--fg-faint)",
+                  fontSize: 11,
+                  maxWidth: 280,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  direction: "rtl",
+                  textAlign: "right",
+                }}
+              >
+                <bdi style={{ direction: "ltr", unicodeBidi: "embed" }}>
+                  {project.library ?? settings.defaultLibrary}/{project.folderId ?? project.id}/
+                </bdi>
               </span>
             </button>
             {workingOpen && <WorkingDir project={project} clips={clips} />}
@@ -308,10 +349,22 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
 const SourceMaterials = ({
   projectId,
   file,
+  project,
+  libraryReachable,
+  settings,
+  onOpen,
 }: {
   projectId: string;
   file: ProjectFile | null;
-}) => (
+  project: Project;
+  libraryReachable: boolean;
+  settings: { defaultLibrary: string };
+  onOpen: () => void;
+}) => {
+  const library = project.library ?? settings.defaultLibrary;
+  const folderId = project.folderId ?? project.id;
+  const fullPath = `${library}/${folderId}/`;
+  return (
   <div className="card" style={{ overflow: "hidden" }}>
     <div
       style={{
@@ -436,8 +489,65 @@ const SourceMaterials = ({
         SOON
       </span>
     </button>
+    <div
+      style={{
+        padding: "8px 10px 8px 14px",
+        borderTop: "1px solid var(--border)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        background: "var(--bg-sunken)",
+      }}
+      title={fullPath}
+    >
+      <span style={{ color: "var(--fg-muted)", flexShrink: 0 }}>
+        <Icon name="folderThin" size={13} />
+      </span>
+      <span
+        className="mono"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 11,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          color: libraryReachable ? "var(--fg-muted)" : "var(--fg-faint)",
+          textDecoration: libraryReachable ? "none" : "line-through",
+          direction: "rtl",
+          textAlign: "left",
+        }}
+      >
+        <bdi style={{ direction: "ltr", unicodeBidi: "embed" }}>{fullPath}</bdi>
+      </span>
+      {!libraryReachable && (
+        <span title="Folder unreachable" style={{ color: "var(--amber)", flexShrink: 0 }}>
+          <Icon name="warn" size={12} />
+        </span>
+      )}
+      <button
+        className="btn-ghost"
+        onClick={libraryReachable ? onOpen : undefined}
+        title={libraryReachable ? "Copy path" : "Folder unreachable"}
+        style={{
+          width: 24,
+          height: 24,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 4,
+          color: libraryReachable ? "var(--fg-muted)" : "var(--fg-faint)",
+          cursor: libraryReachable ? "pointer" : "default",
+          opacity: libraryReachable ? 1 : 0.5,
+          flexShrink: 0,
+        }}
+      >
+        <Icon name="externalLink" size={12} />
+      </button>
+    </div>
   </div>
-);
+  );
+};
 
 const PromptCard = ({
   project,

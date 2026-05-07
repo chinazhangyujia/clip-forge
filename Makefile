@@ -1,6 +1,7 @@
 .PHONY: help install install-backend install-web \
         run-backend run-web \
         build build-backend build-web \
+        build-desktop fetch-ffmpeg \
         lint lint-backend lint-web \
         format format-backend format-web \
         clean
@@ -19,6 +20,8 @@ help:
 	@echo "  build              Build both backend and web"
 	@echo "  build-backend      Compile-check backend Python sources"
 	@echo "  build-web          Build Next.js production bundle"
+	@echo "  build-desktop      Build the Tauri desktop installer (.dmg/.msi)"
+	@echo "  fetch-ffmpeg       Download static ffmpeg/ffprobe for this platform"
 	@echo ""
 	@echo "  lint               Lint both backend and web"
 	@echo "  lint-backend       Lint backend with ruff"
@@ -55,6 +58,17 @@ build-backend:
 build-web:
 	cd web && npm run build
 
+# Full desktop installer build (Mac .dmg or Windows .msi). Requires:
+#   - Rust toolchain (rustup default stable, with ~/.cargo/bin in PATH)
+#   - Tauri CLI (`cargo install tauri-cli --version "^2.0" --locked`)
+#   - CLIPFORGE_DEEPSEEK_API_KEY env var (and optionally ANTHROPIC) — these
+#     are baked into the Tauri binary at compile time.
+build-desktop:
+	bash desktop/scripts/build.sh
+
+fetch-ffmpeg:
+	bash desktop/scripts/fetch-ffmpeg.sh
+
 # ---------- lint ----------
 
 lint: lint-backend lint-web
@@ -82,3 +96,4 @@ clean:
 	find backend -type d -name __pycache__ -prune -exec rm -rf {} +
 	find backend -type d -name "*.egg-info" -prune -exec rm -rf {} +
 	rm -rf web/node_modules web/.next web/out
+	rm -rf desktop/build desktop/src-tauri/target desktop/src-tauri/binaries desktop/src-tauri/gen

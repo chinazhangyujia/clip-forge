@@ -1,0 +1,113 @@
+name: Build desktop installers
+
+# Triggers:
+#   * push to main → build both Mac and Windows installers, upload as artifacts
+#   * tag v* → also attach artifacts to a draft GitHub Release
+#   * workflow_dispatch → manual run from the Actions UI
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_glob: "desktop/src-tauri/target/release/bundle/dmg/*.dmg"
+            artifact_name: ClipForge-mac-arm64
+          - os: windows-latest
+            platform: win
+            artifact_glob: "desktop/src-tauri/target/release/bundle/msi/*.msi"
+            artifact_name: ClipForge-win-x64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    env:
+      # API keys baked into the Rust binary at compile time. Add these to your
+      # repo's Settings → Secrets and variables → Actions before pushing.
+      CLIPFORGE_DEEPSEEK_API_KEY: ${{ secrets.CLIPFORGE_DEEPSEEK_API_KEY }}
+      CLIPFORGE_ANTHROPIC_API_KEY: ${{ secrets.CLIPFORGE_ANTHROPIC_API_KEY }}
+      CLIPFORGE_LLM_PROVIDER: ${{ vars.CLIPFORGE_LLM_PROVIDER || 'deepseek' }}
+      CLIPFORGE_WHISPER_MODEL: ${{ vars.CLIPFORGE_WHISPER_MODEL || 'base' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + tauri target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install backend deps (uv)
+        working-directory: backend
+        run: uv sync --extra dev
+
+      - name: Install web deps (npm)
+        working-directory: web
+        run: npm ci
+
+      - name: Run build (mac/win)
+        if: runner.os != 'Windows'
+        run: bash desktop/scripts/build.sh
+
+      - name: Run build (Windows, via Git Bash)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: bash desktop/scripts/build.sh
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create draft release with installers
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            artifacts/ClipForge-mac-arm64/*.dmg
+            artifacts/ClipForge-win-x64/*.msi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

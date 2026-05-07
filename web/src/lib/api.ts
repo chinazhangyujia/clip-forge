@@ -1,6 +1,26 @@
 import type { Clip, Project, TranscriptSegment } from "./types";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// The backend's base URL. Defaults to NEXT_PUBLIC_API_URL (build-time) or
+// http://localhost:8000 (dev). When running inside the Tauri desktop shell,
+// `initApi()` replaces this with the runtime port the shell allocated.
+let _base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const baseUrl = (): string => _base;
+
+type TauriWindow = { __TAURI_INTERNALS__?: unknown };
+
+export async function initApi(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const tauri = (window as unknown as TauriWindow).__TAURI_INTERNALS__;
+  if (!tauri) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const url = await invoke<string>("get_backend_url");
+    _base = url;
+  } catch (e) {
+    console.error("get_backend_url failed; falling back to default base", e);
+  }
+}
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -14,21 +34,26 @@ export type CreateProjectPayload = {
   name: string;
   prompt: string;
   file: File;
+  // Optional per-project library override. When unset, the backend uses its
+  // configured workspace as the parent directory.
+  library?: string;
 };
 
 export const api = {
-  base: BASE,
+  get base() {
+    return baseUrl();
+  },
 
   listProjects: async (): Promise<Project[]> => {
-    return jsonOrThrow(await fetch(`${BASE}/projects`));
+    return jsonOrThrow(await fetch(`${baseUrl()}/projects`));
   },
 
   getProject: async (id: string): Promise<Project> => {
-    return jsonOrThrow(await fetch(`${BASE}/projects/${id}`));
+    return jsonOrThrow(await fetch(`${baseUrl()}/projects/${id}`));
   },
 
   listClips: async (projectId: string): Promise<Clip[]> => {
-    return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/clips`));
+    return jsonOrThrow(await fetch(`${baseUrl()}/projects/${projectId}/clips`));
   },
 
   createProject: (
@@ -37,11 +62,12 @@ export const api = {
   ): Promise<Project> =>
     new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${BASE}/projects`);
+      xhr.open("POST", `${baseUrl()}/projects`);
       const fd = new FormData();
       fd.append("name", payload.name);
       fd.append("prompt", payload.prompt);
       fd.append("file", payload.file);
+      if (payload.library) fd.append("library", payload.library);
       xhr.upload.addEventListener("progress", (e) => {
         if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
       });
@@ -66,7 +92,7 @@ export const api = {
     patch: { name?: string; prompt?: string },
   ): Promise<Project> => {
     return jsonOrThrow(
-      await fetch(`${BASE}/projects/${id}`, {
+      await fetch(`${baseUrl()}/projects/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -76,12 +102,12 @@ export const api = {
 
   rerunProject: async (id: string): Promise<Project> => {
     return jsonOrThrow(
-      await fetch(`${BASE}/projects/${id}/rerun`, { method: "POST" }),
+      await fetch(`${baseUrl()}/projects/${id}/rerun`, { method: "POST" }),
     );
   },
 
   deleteProject: async (id: string): Promise<void> => {
-    const res = await fetch(`${BASE}/projects/${id}`, { method: "DELETE" });
+    const res = await fetch(`${baseUrl()}/projects/${id}`, { method: "DELETE" });
     if (!res.ok) {
       const detail = await res.text();
       throw new Error(`${res.status}: ${detail}`);
@@ -93,7 +119,7 @@ export const api = {
     bounds: { startSec: number; endSec: number },
   ): Promise<Clip> => {
     return jsonOrThrow(
-      await fetch(`${BASE}/clips/${clipId}`, {
+      await fetch(`${baseUrl()}/clips/${clipId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(bounds),
@@ -101,18 +127,18 @@ export const api = {
     );
   },
 
-  clipDownloadUrl: (clipId: string): string => `${BASE}/clips/${clipId}/download`,
+  clipDownloadUrl: (clipId: string): string => `${baseUrl()}/clips/${clipId}/download`,
 
-  sourceUrl: (projectId: string): string => `${BASE}/projects/${projectId}/source`,
+  sourceUrl: (projectId: string): string => `${baseUrl()}/projects/${projectId}/source`,
 
   artifactUrl: (
     projectId: string,
     name: "transcript.json" | "cuts.json",
-  ): string => `${BASE}/projects/${projectId}/artifacts/${name}`,
+  ): string => `${baseUrl()}/projects/${projectId}/artifacts/${name}`,
 
   fetchTranscript: async (projectId: string): Promise<TranscriptSegment[]> => {
     const res = await fetch(
-      `${BASE}/projects/${projectId}/artifacts/transcript.json`,
+      `${baseUrl()}/projects/${projectId}/artifacts/transcript.json`,
     );
     if (!res.ok) return [];
     return (await res.json()) as TranscriptSegment[];

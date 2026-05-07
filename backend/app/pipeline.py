@@ -13,15 +13,9 @@ import json
 import logging
 from pathlib import Path
 
-from .blobstore import (
-    audio_key,
-    clip_key,
-    cuts_key,
-    get_blobstore,
-    source_key,
-    transcript_key,
-)
-from .datastore import get_datastore
+from . import _project_paths as pp
+from ._resources import ffmpeg_bin
+from .datastore import ProjectRow, get_datastore
 from .providers import Cut, get_provider
 
 log = logging.getLogger(__name__)
@@ -46,7 +40,7 @@ async def _run(*args: str) -> tuple[int, str, str]:
 
 async def probe_duration_sec(source: Path) -> float:
     code, out, err = await _run(
-        "ffprobe",
+        ffmpeg_bin("ffprobe"),
         "-v",
         "error",
         "-show_entries",
@@ -70,24 +64,21 @@ async def probe_duration_sec(source: Path) -> float:
         ) from e
 
 
-async def _source_path_for(project_id: str) -> Path:
-    ds = get_datastore()
-    bs = get_blobstore()
-    project = await ds.get_project(project_id)
+async def _get_project(project_id: str) -> ProjectRow:
+    project = await get_datastore().get_project(project_id)
     if project is None:
         raise RuntimeError(f"Project {project_id} not found")
-    ext = Path(project.source_filename or "source.mp4").suffix.lower() or ".mp4"
-    return bs.local_path(source_key(project_id, ext))
+    return project
 
 
 async def extract_audio(project_id: str) -> Path:
-    bs = get_blobstore()
-    src_path = await _source_path_for(project_id)
+    project = await _get_project(project_id)
+    src_path = pp.source_path(project)
     if not src_path.exists():
-        raise RuntimeError("Source file not found in blob store")
-    out_path = bs.local_path(audio_key(project_id))
+        raise RuntimeError("Source file not found")
+    out_path = pp.audio_path(project)
     code, _, err = await _run(
-        "ffmpeg",
+        ffmpeg_bin("ffmpeg"),
         "-y",
         "-i",
         str(src_path),
@@ -117,7 +108,21 @@ def _get_whisper_model():
         return _whisper_model
     from faster_whisper import WhisperModel
 
+    from ._resources import bundled_whisper_model_dir
     from .config import settings
+
+    # Prefer the model shipped inside the .app/.msi bundle when the user is on
+    # the configured "base" model (the only one we currently bundle). Avoids
+    # the first-transcribe network round trip and works fully offline.
+    bundled = bundled_whisper_model_dir()
+    if bundled is not None and settings.clipforge_whisper_model == "base":
+        log.info("Loading bundled faster-whisper model from %s", bundled)
+        _whisper_model = WhisperModel(
+            str(bundled),
+            device="cpu",
+            compute_type="int8",
+        )
+        return _whisper_model
 
     download_root = settings.workspace_dir / "models"
     download_root.mkdir(parents=True, exist_ok=True)
@@ -149,21 +154,19 @@ async def transcribe(project_id: str) -> list[dict]:
     exists for this project — re-runs of the pipeline (after a downstream
     stage fails) reuse the prior transcript, since transcribing is by far the
     slowest stage."""
-    bs = get_blobstore()
-    if await bs.exists(transcript_key(project_id)):
+    project = await _get_project(project_id)
+    transcript_p = pp.transcript_path(project)
+    if transcript_p.exists():
         log.info(
             "[%s] transcript already exists, skipping transcribe (reuse cached)",
             project_id,
         )
-        return json.loads(await bs.read_text(transcript_key(project_id)))
-    audio_p = bs.local_path(audio_key(project_id))
+        return json.loads(transcript_p.read_text())
+    audio_p = pp.audio_path(project)
     if not audio_p.exists():
         await extract_audio(project_id)
     segments = await asyncio.to_thread(_transcribe_sync, audio_p)
-    await bs.write_text(
-        transcript_key(project_id),
-        json.dumps(segments, indent=2, ensure_ascii=False),
-    )
+    transcript_p.write_text(json.dumps(segments, indent=2, ensure_ascii=False))
     return segments
 
 
@@ -184,10 +187,11 @@ def _snap_to_segment_boundary(t: float, segments: list[dict]) -> float:
 async def propose_cuts(
     project_id: str, prompt: str, duration_sec: float
 ) -> list[Cut]:
-    bs = get_blobstore()
-    if not await bs.exists(transcript_key(project_id)):
+    project = await _get_project(project_id)
+    transcript_p = pp.transcript_path(project)
+    if not transcript_p.exists():
         raise RuntimeError("Transcript not found; transcribe first")
-    segments = json.loads(await bs.read_text(transcript_key(project_id)))
+    segments = json.loads(transcript_p.read_text())
 
     provider = get_provider()
     cuts = await provider.propose_cuts(segments, prompt, duration_sec)
@@ -200,8 +204,7 @@ async def propose_cuts(
             continue
         snapped.append(Cut(start_sec=start, end_sec=end, title=c.title))
 
-    await bs.write_text(
-        cuts_key(project_id),
+    pp.cuts_path(project).write_text(
         json.dumps(
             [
                 {"start_sec": c.start_sec, "end_sec": c.end_sec, "title": c.title}
@@ -209,7 +212,7 @@ async def propose_cuts(
             ],
             indent=2,
             ensure_ascii=False,
-        ),
+        )
     )
     return snapped
 
@@ -220,15 +223,15 @@ async def propose_cuts(
 async def slice_clip(
     project_id: str, clip_id: str, start_sec: float, end_sec: float
 ) -> Path:
-    bs = get_blobstore()
-    src_path = await _source_path_for(project_id)
+    project = await _get_project(project_id)
+    src_path = pp.source_path(project)
     if not src_path.exists():
         raise RuntimeError("Source file not found")
-    out_path = bs.local_path(clip_key(project_id, clip_id))
+    out_path = pp.clip_path(project, clip_id)
     duration = max(0.1, end_sec - start_sec)
     # -ss after -i is accurate (vs. fast keyframe-snap when before -i).
     code, _, err = await _run(
-        "ffmpeg",
+        ffmpeg_bin("ffmpeg"),
         "-y",
         "-i",
         str(src_path),

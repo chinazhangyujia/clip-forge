@@ -53,7 +53,7 @@ const probeDuration = (file: File): Promise<number> =>
   });
 
 export const NewProject = () => {
-  const { createProject, pushToast } = useStore();
+  const { createProject, pushToast, settings, pickFolder } = useStore();
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [file, setFile] = useState<File | null>(null);
@@ -64,6 +64,21 @@ export const NewProject = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Per-project library override. null = inherit the current default.
+  const [libraryOverride, setLibraryOverride] = useState<string | null>(null);
+  const savingTo = libraryOverride ?? settings.defaultLibrary;
+  const usingDefault = libraryOverride === null;
+
+  const onChangeFolder = async () => {
+    const picked = await pickFolder();
+    if (!picked) return;
+    setLibraryOverride(picked);
+    pushToast({
+      kind: "success",
+      title: "Saving to a different folder for this project.",
+    });
+  };
+  const onResetFolder = () => setLibraryOverride(null);
 
   const onPickFile = async (f: File) => {
     setFile(f);
@@ -99,7 +114,14 @@ export const NewProject = () => {
     setUploadProgress(0);
     try {
       const project = await createProject(
-        { name: name.trim(), prompt: prompt.trim(), file },
+        {
+          name: name.trim(),
+          prompt: prompt.trim(),
+          file,
+          // Persist the per-project override (if any) so the backend records
+          // it in this project's row and uses it for all future file paths.
+          library: libraryOverride ?? undefined,
+        },
         (loaded, total) => setUploadProgress(loaded / total),
       );
       pushToast({
@@ -107,7 +129,7 @@ export const NewProject = () => {
         title: "Project created",
         body: "Processing has started",
       });
-      router.push(`/projects/${project.id}`);
+      router.push(`/project?id=${project.id}`);
     } catch (e) {
       setUploadError(String(e instanceof Error ? e.message : e));
       setUploading(false);
@@ -151,6 +173,10 @@ export const NewProject = () => {
             uploading={uploading}
             uploadProgress={uploadProgress}
             uploadError={uploadError}
+            savingTo={savingTo}
+            usingDefault={usingDefault}
+            onChangeFolder={onChangeFolder}
+            onResetFolder={onResetFolder}
           />
         )}
       </div>
@@ -464,6 +490,10 @@ const Step3 = ({
   uploading,
   uploadProgress,
   uploadError,
+  savingTo,
+  usingDefault,
+  onChangeFolder,
+  onResetFolder,
 }: {
   meta: FileMeta | null;
   name: string;
@@ -471,6 +501,10 @@ const Step3 = ({
   uploading: boolean;
   uploadProgress: number;
   uploadError: string | null;
+  savingTo: string;
+  usingDefault: boolean;
+  onChangeFolder: () => void;
+  onResetFolder: () => void;
 }) => (
   <div>
     <div
@@ -489,11 +523,95 @@ const Step3 = ({
       {name || "Untitled project"}
     </div>
 
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
       <SummaryRow label="Source material" value={meta?.name || "—"} mono />
       <SummaryRow label="Size" value={meta?.size || "—"} mono />
       <SummaryRow label="Duration" value={meta?.duration || "—"} mono />
       <SummaryRow label="Format" value="Local file" mono />
+    </div>
+
+    <div
+      style={{
+        padding: "12px 14px",
+        background: "var(--bg-sunken)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        marginBottom: 24,
+      }}
+    >
+      <div style={{ flexShrink: 0, minWidth: 110 }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: 0.06,
+            textTransform: "uppercase",
+            color: "var(--fg-faint)",
+            marginBottom: 2,
+          }}
+        >
+          Saving to
+        </div>
+        {!usingDefault && (
+          <button
+            onClick={onResetFolder}
+            className="btn-ghost"
+            title="Use the default workspace"
+            style={{
+              fontSize: 10.5,
+              color: "var(--fg-faint)",
+              padding: "1px 4px",
+              borderRadius: 4,
+              marginLeft: -4,
+              letterSpacing: 0.02,
+            }}
+          >
+            ↺ use default
+          </button>
+        )}
+      </div>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          color: "var(--fg)",
+        }}
+        title={savingTo}
+      >
+        <span style={{ color: "var(--fg-muted)", flexShrink: 0 }}>
+          <Icon name="folderThin" size={14} />
+        </span>
+        <span
+          className="mono"
+          style={{
+            fontSize: 12.5,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flex: 1,
+            minWidth: 0,
+            // RTL trick gives middle-ellipsis behavior on overflow.
+            direction: "rtl",
+            textAlign: "left",
+          }}
+        >
+          <bdi style={{ direction: "ltr", unicodeBidi: "embed" }}>{savingTo}</bdi>
+        </span>
+      </div>
+      <button
+        className="btn btn-sm btn-ghost"
+        onClick={onChangeFolder}
+        style={{ color: "var(--fg-muted)" }}
+      >
+        <Icon name="folderThin" size={13} />
+        Change…
+      </button>
     </div>
 
     <div>
