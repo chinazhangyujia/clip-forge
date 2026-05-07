@@ -18,7 +18,11 @@ jobs:
         include:
           - os: macos-latest
             platform: mac
-            artifact_glob: "desktop/src-tauri/target/release/bundle/dmg/*.dmg"
+            # Tauri's macOS bundler produces both *_aarch64.dmg and *_x64.dmg
+            # by default. The Intel one is invalid for us (PyInstaller +
+            # CTranslate2 + ffmpeg are all arm64 binaries), so only ship the
+            # arm64 DMG.
+            artifact_glob: "desktop/src-tauri/target/release/bundle/dmg/*_aarch64.dmg"
             artifact_name: ClipForge-mac-arm64
           - os: windows-latest
             platform: win
@@ -112,7 +116,7 @@ jobs:
         with:
           draft: true
           files: |
-            artifacts/ClipForge-mac-arm64/*.dmg
+            artifacts/ClipForge-mac-arm64/*_aarch64.dmg
             artifacts/ClipForge-win-x64/*.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
