@@ -1,9 +1,12 @@
 import asyncio
 import logging
+import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from . import jobs
 from .blobstore import get_blobstore
@@ -12,6 +15,7 @@ from .routes import clips as clips_routes
 from .routes import projects as projects_routes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -43,6 +47,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(HTTPException)
+async def detailed_http_exception_handler(request: Request, exc: HTTPException):
+    # FastAPI's request-body code path catches every exception from
+    # `request.form()` / `request.json()` and re-raises a generic 400
+    # (`There was an error parsing the body`), discarding the real cause from
+    # the response. That's a debugging black hole for the desktop bundle —
+    # especially on Windows, where temp-file/antivirus/codepage failures all
+    # collapse into the same opaque message. Surface the chained __cause__ so
+    # the user can copy-paste it back to us.
+    if (
+        exc.status_code == 400
+        and exc.detail == "There was an error parsing the body"
+        and exc.__cause__ is not None
+    ):
+        cause = exc.__cause__
+        log.exception(
+            "Body parse failed for %s %s — cause: %s: %s",
+            request.method, request.url.path, type(cause).__name__, cause,
+        )
+        cause_summary = "".join(
+            traceback.format_exception_only(type(cause), cause)
+        ).strip()
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": "There was an error parsing the body",
+                "cause_type": type(cause).__name__,
+                "cause": cause_summary,
+                "method": request.method,
+                "path": request.url.path,
+            },
+        )
+    return await http_exception_handler(request, exc)
 
 
 @app.get("/health")

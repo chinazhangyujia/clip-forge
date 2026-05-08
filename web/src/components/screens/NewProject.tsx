@@ -664,26 +664,7 @@ const Step3 = ({
       </div>
     )}
 
-    {uploadError && (
-      <div
-        style={{
-          marginTop: 20,
-          padding: 14,
-          background: "oklch(0.97 0.04 25)",
-          border: "1px solid oklch(0.9 0.06 25)",
-          borderRadius: "var(--radius)",
-          fontSize: 13,
-          color: "var(--red)",
-          display: "flex",
-          gap: 10,
-        }}
-      >
-        <span style={{ flexShrink: 0, marginTop: 1 }}>
-          <Icon name="alert" size={14} />
-        </span>
-        <span>{uploadError}</span>
-      </div>
-    )}
+    {uploadError && <UploadErrorBlock message={uploadError} />}
 
     {!uploading && !uploadError && (
       <div
@@ -710,6 +691,76 @@ const Step3 = ({
     )}
   </div>
 );
+
+const UploadErrorBlock = ({ message }: { message: string }) => {
+  const { pushToast } = useStore();
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+      pushToast({
+        kind: "success",
+        title: "Error copied",
+        body: "Paste it into your message to share with us.",
+      });
+    } catch {
+      pushToast({
+        kind: "error",
+        title: "Could not copy",
+        body: "Select the text manually and copy.",
+      });
+    }
+  };
+  return (
+    <div
+      style={{
+        marginTop: 20,
+        padding: 14,
+        background: "oklch(0.97 0.04 25)",
+        border: "1px solid oklch(0.9 0.06 25)",
+        borderRadius: "var(--radius)",
+        fontSize: 13,
+        color: "var(--red)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <span style={{ flexShrink: 0 }}>
+          <Icon name="alert" size={14} />
+        </span>
+        <span style={{ fontWeight: 500, flex: 1 }}>
+          Upload failed — copy this and send it to us
+        </span>
+        <button
+          className="btn btn-sm"
+          onClick={onCopy}
+          style={{ flexShrink: 0 }}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre
+        style={{
+          margin: 0,
+          padding: 10,
+          background: "var(--bg-sunken)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm, 6px)",
+          fontFamily: "var(--font-mono-jb), ui-monospace, monospace",
+          fontSize: 12,
+          color: "var(--fg)",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          maxHeight: 280,
+          overflow: "auto",
+        }}
+      >
+        {message}
+      </pre>
+    </div>
+  );
+};
 
 const SummaryRow = ({ label, value, mono }: { label: string; value: string; mono?: boolean }) => (
   <div>

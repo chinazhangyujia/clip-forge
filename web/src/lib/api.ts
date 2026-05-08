@@ -30,6 +30,54 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Build a self-contained diagnostic block for the project-upload failure flow.
+// The desktop user is non-technical — the goal is one clean blob they can
+// copy and paste back to us. Everything load-bearing for debugging
+// (URL the WebView called, file metadata, server-side __cause__ if the
+// backend exception handler unwrapped it) goes into this block.
+function formatUploadError(args: {
+  url: string;
+  status: number;
+  statusText: string;
+  responseText: string;
+  file: File;
+  library?: string;
+}): string {
+  const { url, status, statusText, responseText, file, library } = args;
+  let serverDetail = responseText || "(empty body)";
+  let serverCauseLines = "";
+  try {
+    const parsed = JSON.parse(responseText) as {
+      detail?: string;
+      cause?: string;
+      cause_type?: string;
+    };
+    if (parsed.detail) serverDetail = parsed.detail;
+    if (parsed.cause) {
+      serverCauseLines = `\nUnderlying cause${
+        parsed.cause_type ? ` (${parsed.cause_type})` : ""
+      }:\n${parsed.cause}`;
+    }
+  } catch {
+    // Body wasn't JSON — fall back to the raw text.
+  }
+  const lines = [
+    "ClipForge — upload failed",
+    `URL:        ${url}`,
+    `Status:     ${status} ${statusText}`,
+    `File:       ${file.name}`,
+    `Size:       ${file.size} bytes`,
+    `Type:       ${file.type || "(unknown)"}`,
+    library ? `Library:    ${library}` : "Library:    (default workspace)",
+    `User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "(server)"}`,
+    "",
+    "Server detail:",
+    serverDetail,
+  ];
+  if (serverCauseLines) lines.push(serverCauseLines);
+  return lines.join("\n");
+}
+
 export type CreateProjectPayload = {
   name: string;
   prompt: string;
@@ -61,8 +109,9 @@ export const api = {
     onProgress?: (loaded: number, total: number) => void,
   ): Promise<Project> =>
     new Promise((resolve, reject) => {
+      const url = `${baseUrl()}/projects`;
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${baseUrl()}/projects`);
+      xhr.open("POST", url);
       const fd = new FormData();
       fd.append("name", payload.name);
       fd.append("prompt", payload.prompt);
@@ -79,10 +128,25 @@ export const api = {
             reject(new Error("Invalid JSON response from server"));
           }
         } else {
-          reject(new Error(`${xhr.status}: ${xhr.responseText}`));
+          reject(new Error(formatUploadError({
+            url,
+            status: xhr.status,
+            statusText: xhr.statusText,
+            responseText: xhr.responseText,
+            file: payload.file,
+            library: payload.library,
+          })));
         }
       };
-      xhr.onerror = () => reject(new Error("Network error during upload"));
+      xhr.onerror = () =>
+        reject(new Error(formatUploadError({
+          url,
+          status: 0,
+          statusText: "Network error",
+          responseText: "(no response — request never reached the backend)",
+          file: payload.file,
+          library: payload.library,
+        })));
       xhr.onabort = () => reject(new Error("Upload aborted"));
       xhr.send(fd);
     }),
