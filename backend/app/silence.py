@@ -2,7 +2,7 @@
 
 The pipeline produces ~1 minute clips for social platforms, and a 1 minute
 clip with 20 seconds of dead air feels half as long as a 1 minute clip with
-20 seconds of cuts. This module turns Whisper word-level timestamps into a
+20 seconds of cuts. This module turns Whisper *segment* timestamps into a
 "speech mask" — a list of source-time speech windows separated by removable
 pauses — and provides the compact↔source mappings the rest of the pipeline
 needs:
@@ -13,21 +13,33 @@ needs:
   - The trim panel uses the mask as a backdrop so the user can see which
     parts of the source survived.
 
-Pauses shorter than `MAX_PAUSE_SEC` pass through unchanged — natural breaths
-between phrases stay. Pauses longer than that are clamped to `KEEP_PAUSE_SEC`
-in the compact timeline; "no zero-pause cuts" was an explicit user request.
+Why segment-level (not word-level): Whisper segments break at natural
+sentence/clause boundaries (punctuation, intonation drops). Cutting only
+between segments means cuts always land on a sentence break — no
+mid-clause stitches, no "bite-at-a-time" rhythm. Word-level cuts produced
+many micro-pauses inside a sentence, which both sounded chopped and
+forced a browser-seek per cut during in-app playback (each seek causes a
+visible decode hiccup).
+
+Pauses shorter than `MAX_PAUSE_SEC` pass through unchanged — normal
+sentence-end breaths stay. Pauses longer than that have `KEEP_PAUSE_SEC`
+of natural breath baked into the interval bounds (half on each side) so
+the renderer's concat and the player's source-time skip both produce
+audible breathing room at every cut.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Defaults. Hardcoded for v1; promote to per-project settings later if
-# someone needs different aggression.
-MAX_PAUSE_SEC = 0.6  # pauses longer than this are removed
-KEEP_PAUSE_SEC = 0.4  # how much pause to leave in compact time after removal
-PADDING_SEC = 0.05  # tiny pre/post-roll on each interval so consonants survive
-MIN_INTERVAL_SEC = 0.05  # drop intervals shorter than this (parser noise)
+# Defaults. Hardcoded for now; promote to per-project settings later if
+# someone needs different aggression. These are deliberately conservative
+# — natural sentence-end pauses run 0.5–1.2s, so anything shorter than
+# MAX_PAUSE_SEC is preserved as-is.
+MAX_PAUSE_SEC = 1.5  # pauses longer than this between segments are removed
+KEEP_PAUSE_SEC = 0.5  # natural breath kept at every removed-pause boundary
+PADDING_SEC = 0.05  # tiny pre/post-roll so consonants survive segment trim
+MIN_INTERVAL_SEC = 0.1  # drop intervals shorter than this (Whisper junk)
 
 
 @dataclass
@@ -45,43 +57,44 @@ class SpeechInterval:
 
 
 def compute_speech_intervals(
-    words: list[dict],
+    spans: list[dict],
     *,
     source_duration_sec: float,
     max_pause_sec: float = MAX_PAUSE_SEC,
     keep_pause_sec: float = KEEP_PAUSE_SEC,
     padding_sec: float = PADDING_SEC,
 ) -> list[SpeechInterval]:
-    """Group word-level timestamps into speech intervals.
+    """Group `{start, end, ...}` spans into speech intervals.
 
-    Each `words` entry is `{start, end, word, ...}` (faster-whisper format
-    when word_timestamps=True). Pauses longer than `max_pause_sec` between
-    consecutive words start a new interval.
+    Spans are typically Whisper segments (sentence-ish chunks), but the
+    function works on any sorted list of `{start, end}` records. Pauses
+    longer than `max_pause_sec` between consecutive spans split the run
+    into separate intervals; shorter pauses are absorbed into the same
+    interval (so normal sentence-end breaths stay intact).
 
     The kept pause is *baked into the interval bounds*, not inserted as a
     compact-time gap: every interval expands by up to `keep_pause_sec / 2`
     on each side that abuts a long pause, so the renderer (which concats
     with no gap) and the player (which jumps from `iv[i].end` straight to
     `iv[i+1].start`) naturally include `keep_pause_sec` of natural breath
-    at every boundary. This is what keeps cuts from sounding like
-    sentences ramming together.
+    at every boundary.
     """
-    cleaned = [w for w in words if w.get("end", 0) > w.get("start", 0)]
+    cleaned = [s for s in spans if s.get("end", 0) > s.get("start", 0)]
     if not cleaned:
         return []
-    cleaned.sort(key=lambda w: w["start"])
+    cleaned.sort(key=lambda s: s["start"])
 
     runs: list[tuple[float, float]] = []
     run_start = cleaned[0]["start"]
     run_end = cleaned[0]["end"]
-    for w in cleaned[1:]:
-        gap = w["start"] - run_end
+    for s in cleaned[1:]:
+        gap = s["start"] - run_end
         if gap > max_pause_sec:
             runs.append((run_start, run_end))
-            run_start = w["start"]
-            run_end = w["end"]
+            run_start = s["start"]
+            run_end = s["end"]
         else:
-            run_end = max(run_end, w["end"])
+            run_end = max(run_end, s["end"])
     runs.append((run_start, run_end))
 
     half_keep = keep_pause_sec / 2
@@ -120,34 +133,6 @@ def compute_speech_intervals(
         )
         compact_t += dur
     return intervals
-
-
-def fallback_intervals_from_segments(
-    segments: list[dict],
-    *,
-    source_duration_sec: float,
-    keep_pause_sec: float = KEEP_PAUSE_SEC,
-    padding_sec: float = PADDING_SEC,
-) -> list[SpeechInterval]:
-    """Compute speech intervals from segment-level (no word-level) data.
-
-    Used when a transcript was produced before this feature existed and the
-    user opens an old clip without re-running. Each Whisper segment becomes
-    one source-time block; long pauses between segments are still removed.
-    Less precise than `compute_speech_intervals` because intra-segment
-    pauses can't be detected.
-    """
-    pseudo_words = [
-        {"start": s["start"], "end": s["end"], "word": ""}
-        for s in segments
-        if s.get("end", 0) > s.get("start", 0)
-    ]
-    return compute_speech_intervals(
-        pseudo_words,
-        source_duration_sec=source_duration_sec,
-        keep_pause_sec=keep_pause_sec,
-        padding_sec=padding_sec,
-    )
 
 
 def compact_total(intervals: list[SpeechInterval]) -> float:

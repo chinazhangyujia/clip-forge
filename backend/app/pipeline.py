@@ -143,31 +143,24 @@ def _get_whisper_model():
 
 
 def _transcribe_sync(audio: Path) -> tuple[list[dict], str]:
-    """Run Whisper. Each returned segment carries `words` (per-word
-    timestamps) so the silence-removal stage can find intra-segment pauses
-    that segment-level timestamps would hide.
-    """
+    """Run Whisper at segment granularity.
+
+    We deliberately don't enable `word_timestamps`: cuts are made between
+    Whisper segments (which are sentence/clause boundaries by design), and
+    word-level timing only enabled mid-sentence cuts that turned out to
+    feel chopped during playback. Plus per-word timing roughly doubles
+    transcript size and adds ~10% to transcribe time."""
     model = _get_whisper_model()
     segments, info = model.transcribe(
-        str(audio), beam_size=1, vad_filter=True, word_timestamps=True
+        str(audio), beam_size=1, vad_filter=True
     )
     out = []
     for seg in segments:
-        words = []
-        for w in seg.words or []:
-            words.append(
-                {
-                    "start": float(w.start),
-                    "end": float(w.end),
-                    "word": w.word,
-                }
-            )
         out.append(
             {
                 "start": float(seg.start),
                 "end": float(seg.end),
                 "text": seg.text,
-                "words": words,
             }
         )
     return out, info.language
@@ -181,30 +174,14 @@ def _to_simplified_chinese(segments: list[dict]) -> None:
 
     for seg in segments:
         seg["text"] = convert(seg["text"], "zh-cn")
-        for w in seg.get("words", []):
-            if "word" in w:
-                w["word"] = convert(w["word"], "zh-cn")
-
-
-def _all_words(segments: list[dict]) -> list[dict]:
-    out: list[dict] = []
-    for seg in segments:
-        out.extend(seg.get("words", []) or [])
-    return out
 
 
 def _build_speech_intervals(
     segments: list[dict], source_duration_sec: float
 ) -> list[silence.SpeechInterval]:
-    """Prefer word-level timing for pause detection. Fall back to segment
-    boundaries if a transcript predates word_timestamps (legacy projects
-    that haven't been re-run)."""
-    words = _all_words(segments)
-    if words:
-        return silence.compute_speech_intervals(
-            words, source_duration_sec=source_duration_sec
-        )
-    return silence.fallback_intervals_from_segments(
+    """Group sentence-level Whisper segments into speech intervals,
+    splitting only when the inter-segment pause exceeds the threshold."""
+    return silence.compute_speech_intervals(
         segments, source_duration_sec=source_duration_sec
     )
 
