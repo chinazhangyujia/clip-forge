@@ -15,10 +15,6 @@ dependencies = [
     # Whisper sometimes emits Traditional Chinese for Mandarin audio. We
     # post-process to Simplified for the China-mainland deployment.
     "zhconv>=1.4",
-    # Headless OpenCV for face detection in the vertical-reframe pipeline.
-    # Headless variant skips GUI libs (cv2.imshow etc.) — we don't need
-    # them server-side and they bloat the installer.
-    "opencv-python-headless>=4.10",
 ]
 
 [project.optional-dependencies]

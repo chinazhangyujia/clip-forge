@@ -412,9 +412,10 @@ async def slice_clip_reframe(
 ) -> Path:
     """Render the 9:16 vertical-reframe variant of a clip.
 
-    Same multi-interval concat path as `slice_clip`, with face-tracked
-    crop appended after the concat. Face detection runs in a thread (cv2
-    is blocking); ffmpeg is a subprocess so it doesn't block the loop."""
+    Same multi-interval concat path as `slice_clip`, with a static
+    letterbox+pad applied after concat: the original 16:9 clip is
+    scaled to fit the 1080×1920 canvas width and centered vertically,
+    with a light-grey placeholder fill above and below."""
     if not intervals:
         raise RuntimeError(f"slice_clip_reframe {clip_id}: no intervals provided")
     project = await _get_project(project_id)
@@ -423,22 +424,9 @@ async def slice_clip_reframe(
         raise RuntimeError("Source file not found")
     out_path = pp.clip_variant_path(project, clip_id, "reframe")
 
-    samples, frame_w, frame_h = await asyncio.to_thread(
-        reframe_mod.detect_face_trajectory, src_path, intervals
-    )
-    smoothed = reframe_mod.smooth_trajectory(samples)
-    log.info(
-        "[%s] reframe %s: %d face samples (%dx%d source) — %s",
-        project_id, clip_id, len(samples), frame_w, frame_h,
-        "tracking" if samples else "no faces detected, using static center crop",
-    )
-    crop_x_expr = reframe_mod.build_crop_expression(smoothed, frame_w, frame_h)
-    suffix = reframe_mod.reframe_filter_suffix(crop_x_expr)
-
+    suffix = reframe_mod.reframe_filter_suffix()
     base_fc = _build_concat_filter(intervals)
-    # Splice the reframe suffix into the concat output's video stream:
-    #   …concat=…[outv][outa];[outv]<suffix>[outv_r]
-    # Then map outv_r as the final video stream.
+    # Splice the reframe suffix into the concat output's video stream.
     fc = f"{base_fc};[outv]{suffix}[outv_r]"
     code, _, err = await _run(
         ffmpeg_bin("ffmpeg"),
