@@ -31,6 +31,7 @@ audible breathing room at every cut.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import pairwise
 
 # Defaults. Hardcoded for now; promote to per-project settings later if
 # someone needs different aggression. These are deliberately conservative
@@ -150,7 +151,7 @@ def source_to_compact(t: float, intervals: list[SpeechInterval]) -> float:
             return iv.compact_start + (t - iv.src_start)
     if t < intervals[0].src_start:
         return 0.0
-    for prev, nxt in zip(intervals, intervals[1:], strict=True):
+    for prev, nxt in pairwise(intervals):
         if prev.src_end < t < nxt.src_start:
             # Pick the closer edge.
             if (t - prev.src_end) <= (nxt.src_start - t):
@@ -169,7 +170,7 @@ def compact_to_source(t: float, intervals: list[SpeechInterval]) -> float:
             return iv.src_start + (t - iv.compact_start)
     if t < intervals[0].compact_start:
         return intervals[0].src_start
-    for prev, nxt in zip(intervals, intervals[1:], strict=True):
+    for prev, nxt in pairwise(intervals):
         if prev.compact_end < t < nxt.compact_start:
             return nxt.src_start
     return intervals[-1].src_end
