@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 ARTIFACT_MEDIA = {
     "transcript.json": "application/json",
     "cuts.json": "application/json",
+    "speech_intervals.json": "application/json",
 }
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -210,6 +211,7 @@ async def rerun_project(project_id: str) -> Project:
     # transcripts are normalized). The source video is left untouched.
     pp.transcript_path(existing).unlink(missing_ok=True)
     pp.cuts_path(existing).unlink(missing_ok=True)
+    pp.speech_intervals_path(existing).unlink(missing_ok=True)
     updated = await ds.update_project(
         project_id,
         {
@@ -293,6 +295,8 @@ async def get_artifact(project_id: str, name: str) -> FileResponse:
         path = pp.transcript_path(project)
     elif name == "cuts.json":
         path = pp.cuts_path(project)
+    elif name == "speech_intervals.json":
+        path = pp.speech_intervals_path(project)
     else:  # unreachable — ARTIFACT_MEDIA whitelist is the source of truth
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown artifact {name!r}")
     if not path.exists():

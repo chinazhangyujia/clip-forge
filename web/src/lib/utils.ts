@@ -1,4 +1,82 @@
-import type { Clip, Project, TranscriptLine } from "./types";
+import type { Clip, ClipInterval, Project, TranscriptLine } from "./types";
+
+// ---------- Compact-time mapping for silence-removed clips ----------
+//
+// A clip's source-time intervals form its compact timeline: the player
+// jumps from intervals[i].endSec to intervals[i+1].startSec (skipping the
+// removed silence), and the displayed clip duration equals the sum of
+// interval lengths. These helpers translate between the two timelines so
+// the Player and TrimPanel can think in compact time while seeking the
+// underlying <video> in source time.
+
+export const intervalsCompactDuration = (intervals: ClipInterval[]): number =>
+  intervals.reduce((sum, iv) => sum + (iv.endSec - iv.startSec), 0);
+
+// source-time → compact-time. A point inside an interval maps linearly;
+// a point in the removed-pause gap snaps to the nearest interval edge in
+// compact time.
+export const sourceToCompact = (
+  sourceSec: number,
+  intervals: ClipInterval[],
+): number => {
+  if (intervals.length === 0) return Math.max(0, sourceSec);
+  let acc = 0;
+  for (let i = 0; i < intervals.length; i++) {
+    const iv = intervals[i];
+    if (sourceSec < iv.startSec) {
+      if (i === 0) return 0;
+      const prev = intervals[i - 1];
+      // Pick whichever interval edge is closer in source time.
+      return sourceSec - prev.endSec <= iv.startSec - sourceSec ? acc : acc;
+    }
+    if (sourceSec <= iv.endSec) {
+      return acc + (sourceSec - iv.startSec);
+    }
+    acc += iv.endSec - iv.startSec;
+  }
+  return acc;
+};
+
+// compact-time → source-time. The player uses this when the user scrubs
+// the clip; the trim panel uses it when mapping its handle positions
+// down to source-time bounds.
+export const compactToSource = (
+  compactSec: number,
+  intervals: ClipInterval[],
+): number => {
+  if (intervals.length === 0) return Math.max(0, compactSec);
+  let acc = 0;
+  for (const iv of intervals) {
+    const dur = iv.endSec - iv.startSec;
+    if (compactSec <= acc + dur) {
+      return iv.startSec + (compactSec - acc);
+    }
+    acc += dur;
+  }
+  return intervals[intervals.length - 1].endSec;
+};
+
+// Given the current source-time position, return the start of the next
+// speech interval (so the Player can jump over a removed pause), or null
+// if we're already inside the last interval / past the end.
+export const nextSpeechSrcTime = (
+  sourceSec: number,
+  intervals: ClipInterval[],
+): number | null => {
+  for (const iv of intervals) {
+    if (sourceSec < iv.startSec - 0.01) return iv.startSec;
+  }
+  return null;
+};
+
+export const isPastLastInterval = (
+  sourceSec: number,
+  intervals: ClipInterval[],
+): boolean => {
+  if (intervals.length === 0) return false;
+  return sourceSec >= intervals[intervals.length - 1].endSec - 0.01;
+};
+
 
 export const fmtTime = (s: number): string => {
   const h = Math.floor(s / 3600);

@@ -11,12 +11,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import _project_paths as pp
+from . import silence
 from ._resources import ffmpeg_bin
 from .datastore import ProjectRow, get_datastore
-from .providers import Cut, get_provider
+from .providers import get_provider
 
 log = logging.getLogger(__name__)
 
@@ -141,11 +143,33 @@ def _get_whisper_model():
 
 
 def _transcribe_sync(audio: Path) -> tuple[list[dict], str]:
+    """Run Whisper. Each returned segment carries `words` (per-word
+    timestamps) so the silence-removal stage can find intra-segment pauses
+    that segment-level timestamps would hide.
+    """
     model = _get_whisper_model()
-    segments, info = model.transcribe(str(audio), beam_size=1, vad_filter=True)
+    segments, info = model.transcribe(
+        str(audio), beam_size=1, vad_filter=True, word_timestamps=True
+    )
     out = []
     for seg in segments:
-        out.append({"start": float(seg.start), "end": float(seg.end), "text": seg.text})
+        words = []
+        for w in seg.words or []:
+            words.append(
+                {
+                    "start": float(w.start),
+                    "end": float(w.end),
+                    "word": w.word,
+                }
+            )
+        out.append(
+            {
+                "start": float(seg.start),
+                "end": float(seg.end),
+                "text": seg.text,
+                "words": words,
+            }
+        )
     return out, info.language
 
 
@@ -157,6 +181,32 @@ def _to_simplified_chinese(segments: list[dict]) -> None:
 
     for seg in segments:
         seg["text"] = convert(seg["text"], "zh-cn")
+        for w in seg.get("words", []):
+            if "word" in w:
+                w["word"] = convert(w["word"], "zh-cn")
+
+
+def _all_words(segments: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for seg in segments:
+        out.extend(seg.get("words", []) or [])
+    return out
+
+
+def _build_speech_intervals(
+    segments: list[dict], source_duration_sec: float
+) -> list[silence.SpeechInterval]:
+    """Prefer word-level timing for pause detection. Fall back to segment
+    boundaries if a transcript predates word_timestamps (legacy projects
+    that haven't been re-run)."""
+    words = _all_words(segments)
+    if words:
+        return silence.compute_speech_intervals(
+            words, source_duration_sec=source_duration_sec
+        )
+    return silence.fallback_intervals_from_segments(
+        segments, source_duration_sec=source_duration_sec
+    )
 
 
 async def transcribe(project_id: str) -> list[dict]:
@@ -166,12 +216,24 @@ async def transcribe(project_id: str) -> list[dict]:
     slowest stage."""
     project = await _get_project(project_id)
     transcript_p = pp.transcript_path(project)
+    speech_p = pp.speech_intervals_path(project)
     if transcript_p.exists():
         log.info(
             "[%s] transcript already exists, skipping transcribe (reuse cached)",
             project_id,
         )
-        return json.loads(transcript_p.read_text())
+        segments = json.loads(transcript_p.read_text())
+        if not speech_p.exists():
+            # Cached transcript predates the speech-interval artifact —
+            # rebuild it from whatever timing the transcript has so the
+            # rest of the pipeline can run without a re-transcribe.
+            ivs = _build_speech_intervals(
+                segments, project.source_duration_sec or 0.0
+            )
+            speech_p.write_text(
+                json.dumps(silence.serialize_intervals(ivs), indent=2)
+            )
+        return segments
     audio_p = pp.audio_path(project)
     if not audio_p.exists():
         await extract_audio(project_id)
@@ -179,78 +241,175 @@ async def transcribe(project_id: str) -> list[dict]:
     if lang == "zh":
         _to_simplified_chinese(segments)
     transcript_p.write_text(json.dumps(segments, indent=2, ensure_ascii=False))
+    ivs = _build_speech_intervals(segments, project.source_duration_sec or 0.0)
+    speech_p.write_text(json.dumps(silence.serialize_intervals(ivs), indent=2))
+    log.info(
+        "[%s] transcribed %d segments, %d speech intervals (compact %.1fs / source %.1fs)",
+        project_id,
+        len(segments),
+        len(ivs),
+        silence.compact_total(ivs),
+        project.source_duration_sec or 0.0,
+    )
     return segments
 
 
 # ---------- cut ----------
 
 
-def _snap_to_segment_boundary(t: float, segments: list[dict]) -> float:
-    """Snap a proposed time to the nearest transcript segment boundary."""
-    if not segments:
+@dataclass(frozen=True)
+class ProposedClip:
+    """One LLM-proposed clip after silence-aware mapping. `src_start` and
+    `src_end` are the outer source-time bounds; `intervals` is the list of
+    source-time speech windows the renderer will concat."""
+
+    title: str
+    src_start: float
+    src_end: float
+    intervals: list[tuple[float, float]]
+
+
+def _snap_to_boundary(t: float, boundaries: list[float]) -> float:
+    if not boundaries:
         return t
-    candidates = [0.0]
+    return min(boundaries, key=lambda c: abs(c - t))
+
+
+def _build_compact_segments(
+    segments: list[dict], intervals: list[silence.SpeechInterval]
+) -> list[dict]:
+    out: list[dict] = []
     for seg in segments:
-        candidates.append(float(seg["start"]))
-        candidates.append(float(seg["end"]))
-    return min(candidates, key=lambda c: abs(c - t))
+        cs = silence.source_to_compact(float(seg["start"]), intervals)
+        ce = silence.source_to_compact(float(seg["end"]), intervals)
+        if ce - cs < 0.1:
+            continue
+        out.append({"start": cs, "end": ce, "text": seg.get("text", "")})
+    return out
 
 
 async def propose_cuts(
     project_id: str, prompt: str, duration_sec: float
-) -> list[Cut]:
+) -> list[ProposedClip]:
+    """Drive the LLM cut step. The LLM sees the compact (silence-removed)
+    timeline so its 60-second target is 60 seconds of speech; we then map
+    each cut back to source-time intervals for the renderer."""
     project = await _get_project(project_id)
     transcript_p = pp.transcript_path(project)
+    speech_p = pp.speech_intervals_path(project)
     if not transcript_p.exists():
         raise RuntimeError("Transcript not found; transcribe first")
     segments = json.loads(transcript_p.read_text())
 
-    provider = get_provider()
-    cuts = await provider.propose_cuts(segments, prompt, duration_sec)
+    if speech_p.exists():
+        intervals = silence.deserialize_intervals(json.loads(speech_p.read_text()))
+    else:
+        intervals = _build_speech_intervals(segments, duration_sec)
 
-    snapped: list[Cut] = []
-    for c in cuts:
-        start = max(0.0, _snap_to_segment_boundary(c.start_sec, segments))
-        end = min(duration_sec, _snap_to_segment_boundary(c.end_sec, segments))
-        if end - start < 1.0:
+    if not intervals:
+        # Nothing transcribed — nothing to cut.
+        pp.cuts_path(project).write_text("[]")
+        return []
+
+    compact_segments = _build_compact_segments(segments, intervals)
+    compact_total = silence.compact_total(intervals)
+    boundaries = sorted(
+        {s["start"] for s in compact_segments} | {s["end"] for s in compact_segments}
+    )
+
+    provider = get_provider()
+    raw_cuts = await provider.propose_cuts(compact_segments, prompt, compact_total)
+
+    proposed: list[ProposedClip] = []
+    for c in raw_cuts:
+        cs = max(0.0, _snap_to_boundary(c.start_sec, boundaries))
+        ce = min(compact_total, _snap_to_boundary(c.end_sec, boundaries))
+        if ce - cs < 1.0:
             continue
-        snapped.append(Cut(start_sec=start, end_sec=end, title=c.title))
+        src_intervals = silence.compact_range_to_source_intervals(cs, ce, intervals)
+        if not src_intervals:
+            continue
+        proposed.append(
+            ProposedClip(
+                title=c.title,
+                src_start=src_intervals[0][0],
+                src_end=src_intervals[-1][1],
+                intervals=src_intervals,
+            )
+        )
 
     pp.cuts_path(project).write_text(
         json.dumps(
             [
-                {"start_sec": c.start_sec, "end_sec": c.end_sec, "title": c.title}
-                for c in snapped
+                {
+                    "title": p.title,
+                    "src_start": p.src_start,
+                    "src_end": p.src_end,
+                    "intervals": [
+                        {"start_sec": s, "end_sec": e} for s, e in p.intervals
+                    ],
+                }
+                for p in proposed
             ],
             indent=2,
             ensure_ascii=False,
         )
     )
-    return snapped
+    return proposed
 
 
 # ---------- slice ----------
 
 
+def _build_concat_filter(intervals: list[tuple[float, float]]) -> str:
+    """Build an ffmpeg `-filter_complex` graph that trims [v]+[a] per
+    interval and concats the trimmed pieces. Both streams are trimmed at
+    identical timestamps so audio and video stay in sync across cuts."""
+    parts: list[str] = []
+    interleaved: list[str] = []
+    for i, (s, e) in enumerate(intervals):
+        parts.append(
+            f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS[v{i}]"
+        )
+        parts.append(
+            f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS[a{i}]"
+        )
+        interleaved.append(f"[v{i}][a{i}]")
+    parts.append(
+        f"{''.join(interleaved)}concat=n={len(intervals)}:v=1:a=1[outv][outa]"
+    )
+    return ";".join(parts)
+
+
 async def slice_clip(
-    project_id: str, clip_id: str, start_sec: float, end_sec: float
+    project_id: str, clip_id: str, intervals: list[tuple[float, float]]
 ) -> Path:
+    """Render a clip from one or more source-time intervals.
+
+    A clip with a single interval renders the obvious sub-range. A clip
+    with multiple intervals (silence-removed) is built via filter_complex:
+    every interval becomes a (trim, atrim) pair, then everything is
+    concat'd. Single re-encode pass."""
+    if not intervals:
+        raise RuntimeError(f"slice_clip {clip_id}: no intervals provided")
     project = await _get_project(project_id)
     src_path = pp.source_path(project)
     if not src_path.exists():
         raise RuntimeError("Source file not found")
     out_path = pp.clip_path(project, clip_id)
-    duration = max(0.1, end_sec - start_sec)
-    # -ss after -i is accurate (vs. fast keyframe-snap when before -i).
+
+    fc = _build_concat_filter(intervals)
     code, _, err = await _run(
         ffmpeg_bin("ffmpeg"),
         "-y",
         "-i",
         str(src_path),
-        "-ss",
-        f"{start_sec:.3f}",
-        "-t",
-        f"{duration:.3f}",
+        "-filter_complex",
+        fc,
+        "-map",
+        "[outv]",
+        "-map",
+        "[outa]",
         "-c:v",
         "libx264",
         "-preset",

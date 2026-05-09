@@ -51,13 +51,27 @@ export type Settings = {
 // still planned, hence kept here as a placeholder variant.
 export type ClipVariant = "original" | "reframe";
 
+// One contiguous source-time speech window of a clip. `intervals` is the
+// list of these that the renderer concats and the player skips between —
+// silences longer than the project threshold are simply absent from the
+// list.
+export type ClipInterval = { startSec: number; endSec: number };
+
 export type Clip = {
   id: string;
   projectId: string;
   title: string;
+  // Compact duration: sum of interval lengths (= what the player plays).
+  // For legacy clips with a single interval this equals endSec - startSec.
   duration: number;
+  // Outer source-time bounds — leftmost interval start / rightmost
+  // interval end. Used by the trim panel for the source-time backdrop.
   startSec: number;
   endSec: number;
+  // Source-time speech intervals after silence removal. Always >= 1
+  // entry; clips with no removable pauses contain the single
+  // [(startSec, endSec)] interval.
+  intervals: ClipInterval[];
   variants: ClipVariant[];
   description: string;
   hashtags: string[];

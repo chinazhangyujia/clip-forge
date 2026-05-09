@@ -95,6 +95,7 @@ hiddenimports += [
     "app.jobs",
     "app.pipeline",
     "app.schemas",
+    "app.silence",
     "app.blobstore.local",
     "app.blobstore.s3",
     "app.datastore.local",

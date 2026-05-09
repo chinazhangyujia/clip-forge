@@ -1,4 +1,4 @@
-import type { Clip, Project, TranscriptSegment } from "./types";
+import type { Clip, ClipInterval, Project, TranscriptSegment } from "./types";
 
 // The backend's base URL. Defaults to NEXT_PUBLIC_API_URL (build-time) or
 // http://localhost:8000 (dev). When running inside the Tauri desktop shell,
@@ -233,6 +233,25 @@ export const api = {
     projectId: string,
     name: "transcript.json" | "cuts.json",
   ): string => `${baseUrl()}/projects/${projectId}/artifacts/${name}`,
+
+  // The project's speech mask — list of source-time intervals where there
+  // was speech, with the long pauses between them removed. Used by the
+  // trim panel as a backdrop so the user can see (and grow into) the
+  // speech regions outside their current clip bounds.
+  fetchSpeechIntervals: async (projectId: string): Promise<ClipInterval[]> => {
+    const res = await fetch(
+      `${baseUrl()}/projects/${projectId}/artifacts/speech_intervals.json`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      intervals?: { src_start: number; src_end: number }[];
+    };
+    return (data.intervals ?? []).map((iv) => ({
+      startSec: iv.src_start,
+      endSec: iv.src_end,
+    }));
+  },
 
   fetchTranscript: async (projectId: string): Promise<TranscriptSegment[]> => {
     // `cache: "no-store"` defends against a stale 404 cached during the

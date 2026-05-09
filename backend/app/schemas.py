@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from .datastore import ClipInterval as ClipIntervalRow
 from .datastore import ClipRow, ProjectRow
 
 
@@ -51,13 +52,25 @@ class ClipOriginal(APIModel):
     end_sec: float
 
 
+class ClipInterval(APIModel):
+    start_sec: float
+    end_sec: float
+
+
 class Clip(APIModel):
     id: str
     project_id: str
     title: str
+    # Compact duration — sum of interval lengths, i.e. what the player and
+    # the trim header actually represent. Distinct from `end_sec - start_sec`
+    # (the source-time span) because removed silences shrink the clip.
     duration: float
     start_sec: float
     end_sec: float
+    # Source-time speech intervals after silence removal. Always >= 1
+    # element. The player concats these for playback; the renderer concats
+    # them for the downloaded MP4.
+    intervals: list[ClipInterval]
     variants: list[str]
     description: str
     hashtags: list[str]
@@ -128,14 +141,26 @@ def project_row_to_dto(row: ProjectRow, clip_count: int) -> Project:
     )
 
 
+def _row_intervals(row: ClipRow) -> list[ClipIntervalRow]:
+    """Backfill: a clip row written before the silence-removal feature lands
+    has no intervals — treat it as a single interval covering the full
+    [start_sec, end_sec] source-time range."""
+    if row.intervals:
+        return row.intervals
+    return [ClipIntervalRow(start_sec=row.start_sec, end_sec=row.end_sec)]
+
+
 def clip_row_to_dto(row: ClipRow) -> Clip:
+    intervals = _row_intervals(row)
+    compact_duration = sum(i.end_sec - i.start_sec for i in intervals)
     return Clip(
         id=row.id,
         project_id=row.project_id,
         title=row.title,
-        duration=row.end_sec - row.start_sec,
+        duration=compact_duration,
         start_sec=row.start_sec,
         end_sec=row.end_sec,
+        intervals=[ClipInterval(start_sec=i.start_sec, end_sec=i.end_sec) for i in intervals],
         variants=row.variants,
         description=row.description,
         hashtags=row.hashtags,

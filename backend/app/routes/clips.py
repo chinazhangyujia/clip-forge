@@ -1,10 +1,11 @@
+import json
 import time
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse
 
 from .. import _project_paths as pp
-from .. import pipeline
+from .. import pipeline, silence
 from ..datastore import get_datastore
 from ..schemas import Clip, ClipUpdate, clip_row_to_dto
 
@@ -38,12 +39,41 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
     existing = await ds.get_clip(clip_id)
     if existing is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
+    project = await ds.get_project(existing.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+
+    # Recompute the source-time intervals by intersecting the user's new
+    # outer bounds with the project's speech mask. The mask is the
+    # source-of-truth: if the user grew the clip into a region containing
+    # silence, the silence stays removed; if they shrunk past one of the
+    # clip's interior intervals, that interval drops out.
+    intervals: list[dict] = []
+    speech_p = pp.speech_intervals_path(project)
+    if speech_p.exists():
+        mask = silence.deserialize_intervals(json.loads(speech_p.read_text()))
+        sliced = silence.source_range_to_source_intervals(
+            body.start_sec, body.end_sec, mask
+        )
+        if not sliced:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Selected range contains no speech — pick a wider window.",
+            )
+        intervals = [{"start_sec": s, "end_sec": e} for s, e in sliced]
+    else:
+        # Pre-feature project: no mask available, fall back to a single
+        # interval covering the user's range. The clip will play with any
+        # silence that's within the bounds — same behavior as before this
+        # feature shipped.
+        intervals = [{"start_sec": body.start_sec, "end_sec": body.end_sec}]
 
     updated = await ds.update_clip(
         clip_id,
         {
             "start_sec": body.start_sec,
             "end_sec": body.end_sec,
+            "intervals": intervals,
             "needs_render": True,
             "updated_at": _now_ms(),
         },
@@ -68,8 +98,11 @@ async def download_clip(clip_id: str) -> FileResponse:
     path = pp.clip_path(project, clip_id)
 
     if row.needs_render or not path.exists():
+        intervals = [(iv.start_sec, iv.end_sec) for iv in row.intervals] or [
+            (row.start_sec, row.end_sec)
+        ]
         try:
-            await pipeline.slice_clip(row.project_id, clip_id, row.start_sec, row.end_sec)
+            await pipeline.slice_clip(row.project_id, clip_id, intervals)
         except Exception as e:
             raise HTTPException(
                 status.HTTP_500_INTERNAL_SERVER_ERROR,

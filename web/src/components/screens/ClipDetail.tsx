@@ -4,11 +4,24 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { fmtDuration, fmtTime } from "@/lib/utils";
+import {
+  compactToSource,
+  fmtDuration,
+  fmtTime,
+  isPastLastInterval,
+  nextSpeechSrcTime,
+  sourceToCompact,
+} from "@/lib/utils";
 import { Icon, Spinner } from "@/lib/icons";
 import { TrimPanel } from "@/components/TrimPanel";
 import { DownloadControl } from "@/components/DownloadControl";
-import type { Clip, ClipVariant, StageState, TranscriptSegment } from "@/lib/types";
+import type {
+  Clip,
+  ClipInterval,
+  ClipVariant,
+  StageState,
+  TranscriptSegment,
+} from "@/lib/types";
 
 type GenKind = "reframe" | null;
 
@@ -28,6 +41,11 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
   // currentSec is in source-time. Driven by the <video> element's events.
   const [currentSec, setCurrentSec] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+  // Project-level speech mask — used as a backdrop in the trim panel and
+  // re-intersected with the user's draft bounds for live preview during a
+  // drag. Empty array = legacy project with no mask, in which case the
+  // trim panel falls back to single-band rendering.
+  const [projectSpeechMask, setProjectSpeechMask] = useState<ClipInterval[]>([]);
   // Variant generation (reframe) isn't implemented yet — `generating` stays
   // null and the UI shows a "coming soon" toast. Captions were dropped from
   // MVP entirely; see lib/types.ts for the rationale.
@@ -50,6 +68,9 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
     let cancelled = false;
     api.fetchTranscript(projectId).then((segs) => {
       if (!cancelled) setTranscript(segs);
+    });
+    api.fetchSpeechIntervals(projectId).then((mask) => {
+      if (!cancelled) setProjectSpeechMask(mask);
     });
     return () => {
       cancelled = true;
@@ -212,6 +233,7 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
             sourceDurationSec={sourceDurationSec}
             neighbors={neighbors}
             snapBoundaries={snapBoundaries}
+            projectSpeechMask={projectSpeechMask}
             isPlaying={isPlaying}
             currentSec={isPlaying ? currentSec : null}
             onPreviewBand={(start, end) =>
@@ -376,11 +398,16 @@ const Player = ({
   setCurrentSec: (s: number) => void;
 }) => {
   const isVertical = variant === "reframe";
+  const intervals = clip.intervals;
+  const firstStart = intervals[0]?.startSec ?? clip.startSec;
 
-  // Clip-relative time for the controls + cold-open hook gating.
+  // Clip-relative time for the controls + cold-open hook gating. With
+  // silence removal, this is COMPACT time — `clip.duration` already comes
+  // back as the sum of interval lengths from the backend, so the
+  // progress bar reflects what the viewer actually experiences.
   const clipTime = Math.max(
     0,
-    Math.min(clip.duration, currentSec - clip.startSec),
+    Math.min(clip.duration, sourceToCompact(currentSec, intervals)),
   );
   const progress = clip.duration > 0 ? clipTime / clip.duration : 0;
   const inHookWindow = Boolean(clip.hookText) && clipTime >= 0 && clipTime < 1.5;
@@ -389,9 +416,8 @@ const Player = ({
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
-      // If we're at/past the clip's end, restart from start.
-      if (v.currentTime >= clip.endSec - 0.05) {
-        v.currentTime = clip.startSec;
+      if (isPastLastInterval(v.currentTime, intervals)) {
+        v.currentTime = firstStart;
       }
       v.play().catch(() => {});
     } else {
@@ -401,18 +427,27 @@ const Player = ({
 
   const handleTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const v = e.currentTarget;
-    setCurrentSec(v.currentTime);
-    // Auto-pause once we cross the clip's out-point.
-    if (v.currentTime >= clip.endSec) {
+    // Past the last speech window → pause and pin to the very end so the
+    // scrubber lands at 100%.
+    if (isPastLastInterval(v.currentTime, intervals)) {
       v.pause();
-      v.currentTime = clip.endSec;
+      v.currentTime = intervals[intervals.length - 1]?.endSec ?? clip.endSec;
+      setCurrentSec(v.currentTime);
+      return;
     }
+    // We rolled into a removed-silence gap — jump to the start of the
+    // next speech interval so the user never hears dead air.
+    const nextStart = nextSpeechSrcTime(v.currentTime, intervals);
+    if (nextStart != null && v.currentTime < nextStart) {
+      v.currentTime = nextStart;
+    }
+    setCurrentSec(v.currentTime);
   };
 
   const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const v = e.currentTarget;
-    if (v.currentTime < clip.startSec || v.currentTime > clip.endSec) {
-      v.currentTime = clip.startSec;
+    if (v.currentTime < firstStart || isPastLastInterval(v.currentTime, intervals)) {
+      v.currentTime = firstStart;
     }
     setCurrentSec(v.currentTime);
   };
@@ -422,7 +457,9 @@ const Player = ({
     if (!v) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    v.currentTime = clip.startSec + frac * clip.duration;
+    // The scrub bar is in compact time; map back to a real source-time
+    // position before seeking the underlying <video>.
+    v.currentTime = compactToSource(frac * clip.duration, intervals);
   };
 
   return (

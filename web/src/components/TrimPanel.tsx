@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/lib/icons";
-import type { Clip } from "@/lib/types";
+import type { Clip, ClipInterval } from "@/lib/types";
 
 type Neighbor = { id: string; startSec: number; endSec: number };
 
@@ -11,6 +11,11 @@ type Props = {
   sourceDurationSec: number;
   neighbors: Neighbor[];
   snapBoundaries: number[];
+  // Project-level speech mask — pause-removed source-time intervals. The
+  // panel re-intersects this with [draftStart, draftEnd] for live preview
+  // of the speech bands as the user drags. Empty = no mask available
+  // (legacy project) → fall back to single-band rendering.
+  projectSpeechMask?: ClipInterval[];
   isPlaying: boolean;
   currentSec: number | null;
   onPreviewBand: (start: number | null, end?: number) => void;
@@ -19,6 +24,25 @@ type Props = {
   // seek the source video to the new boundary — gives the user a live
   // preview of what frame each handle lands on.
   onScrubTo?: (sec: number) => void;
+};
+
+// Slice the project's speech mask by a source-time range. The result is
+// the list of speech bands the renderer would actually concat — its sum
+// is the compact duration the viewer experiences.
+const sliceMask = (
+  start: number,
+  end: number,
+  mask: ClipInterval[],
+): ClipInterval[] => {
+  if (mask.length === 0 || end <= start) return [];
+  const out: ClipInterval[] = [];
+  for (const iv of mask) {
+    if (iv.endSec <= start || iv.startSec >= end) continue;
+    const s = Math.max(iv.startSec, start);
+    const e = Math.min(iv.endSec, end);
+    if (e - s > 0.05) out.push({ startSec: s, endSec: e });
+  }
+  return out;
 };
 
 const fmtTrim = (s: number): string => {
@@ -91,6 +115,7 @@ export const TrimPanel = ({
   sourceDurationSec,
   neighbors,
   snapBoundaries,
+  projectSpeechMask,
   isPlaying,
   currentSec,
   onPreviewBand,
@@ -310,7 +335,20 @@ export const TrimPanel = ({
 
   const save = () => onSave(draftStart, draftEnd);
 
-  const duration = draftEnd - draftStart;
+  // Active speech bands within the draft range. With a project mask the
+  // panel renders one solid block per band (and a visible gap where each
+  // long pause was removed); without a mask we fall back to a single band
+  // covering [draftStart, draftEnd], same as before this feature.
+  const activeBands: ClipInterval[] =
+    projectSpeechMask && projectSpeechMask.length > 0
+      ? sliceMask(draftStart, draftEnd, projectSpeechMask)
+      : [{ startSec: draftStart, endSec: draftEnd }];
+  const compactDuration = activeBands.reduce(
+    (sum, b) => sum + (b.endSec - b.startSec),
+    0,
+  );
+  const sourceSpan = draftEnd - draftStart;
+  const removedSeconds = sourceSpan - compactDuration;
 
   const visibleNeighbors = neighbors.filter(
     (n) => n.id !== clip.id && n.endSec > winStart && n.startSec < winEnd,
@@ -364,8 +402,13 @@ export const TrimPanel = ({
                 fontWeight: 500,
               }}
             >
-              {duration.toFixed(1)}s
+              {compactDuration.toFixed(1)}s
             </span>
+            {removedSeconds > 0.2 && (
+              <span style={{ color: "var(--fg-faint)", marginLeft: 4 }}>
+                (−{removedSeconds.toFixed(1)}s pauses)
+              </span>
+            )}
           </span>
         </div>
 
@@ -464,6 +507,9 @@ export const TrimPanel = ({
             );
           })}
 
+          {/* Faint outer-bounds region — the source-time span the user
+              has selected. Speech bands render on top in solid color;
+              the visible gap between them represents removed silence. */}
           <div
             style={{
               position: "absolute",
@@ -471,12 +517,37 @@ export const TrimPanel = ({
               height: "100%",
               left: `${Math.max(0, viewFrac(draftStart)) * 100}%`,
               width: `${Math.max(0, Math.min(1, viewFrac(draftEnd)) - Math.max(0, viewFrac(draftStart))) * 100}%`,
-              background: "var(--accent)",
+              background: "var(--accent-soft)",
               borderRadius: 999,
-              boxShadow: drag ? "0 0 0 4px var(--accent-soft)" : "none",
-              transition: drag ? "none" : "box-shadow .15s, left .12s, width .12s",
+              opacity: 0.55,
+              pointerEvents: "none",
             }}
           />
+          {activeBands.map((band, i) => {
+            const left = Math.max(0, viewFrac(band.startSec)) * 100;
+            const right = Math.min(1, viewFrac(band.endSec)) * 100;
+            const width = Math.max(0, right - left);
+            return (
+              <div
+                key={i}
+                title={`Speech ${fmtTrim(band.startSec)} → ${fmtTrim(band.endSec)}`}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  height: "100%",
+                  left: `${left}%`,
+                  width: `${width}%`,
+                  background: "var(--accent)",
+                  borderRadius: activeBands.length === 1 ? 999 : 3,
+                  boxShadow: drag ? "0 0 0 4px var(--accent-soft)" : "none",
+                  transition: drag
+                    ? "none"
+                    : "box-shadow .15s, left .12s, width .12s",
+                  pointerEvents: "none",
+                }}
+              />
+            );
+          })}
 
           {[
             { sec: original.startSec, key: "os" },

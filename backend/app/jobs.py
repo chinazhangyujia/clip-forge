@@ -14,7 +14,7 @@ import time
 from time import monotonic
 
 from . import pipeline
-from .datastore import ClipRow, JobRow, get_datastore
+from .datastore import ClipInterval, ClipRow, JobRow, get_datastore
 
 log = logging.getLogger(__name__)
 
@@ -133,10 +133,15 @@ async def _run_pipeline(project_id: str) -> None:
                 id=clip_id,
                 project_id=project_id,
                 title=c.title,
-                start_sec=c.start_sec,
-                end_sec=c.end_sec,
-                original_start_sec=c.start_sec,
-                original_end_sec=c.end_sec,
+                # Outer source-time bounds — used by neighbor checks and
+                # legacy queries. The actual render uses `intervals`.
+                start_sec=c.src_start,
+                end_sec=c.src_end,
+                original_start_sec=c.src_start,
+                original_end_sec=c.src_end,
+                intervals=[
+                    ClipInterval(start_sec=s, end_sec=e) for s, e in c.intervals
+                ],
                 variants=["original"],
                 stale_variants=[],
                 needs_render=True,
@@ -179,7 +184,10 @@ async def _run_render_clip(project_id: str, clip_id: str) -> None:
     clip = await ds.get_clip(clip_id)
     if clip is None:
         raise RuntimeError(f"Clip {clip_id} not found")
-    await pipeline.slice_clip(project_id, clip_id, clip.start_sec, clip.end_sec)
+    intervals = [(iv.start_sec, iv.end_sec) for iv in clip.intervals] or [
+        (clip.start_sec, clip.end_sec)
+    ]
+    await pipeline.slice_clip(project_id, clip_id, intervals)
     await ds.update_clip(clip_id, {"needs_render": False, "updated_at": _now_ms()})
 
 

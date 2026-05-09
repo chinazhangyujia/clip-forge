@@ -34,14 +34,30 @@ class ProjectRow(BaseModel):
     updated_at: int
 
 
+class ClipInterval(BaseModel):
+    """A contiguous source-time window of speech that the renderer concats
+    into the final clip. A clip with no removable pauses has a single
+    interval; a clip that spanned a long silence has 2+ intervals."""
+
+    start_sec: float
+    end_sec: float
+
+
 class ClipRow(BaseModel):
     id: str
     project_id: str
     title: str
+    # Outer source-time bounds — the leftmost start / rightmost end of
+    # `intervals`. Kept as a denormalized cache so list/sort queries don't
+    # have to walk the intervals list.
     start_sec: float
     end_sec: float
     original_start_sec: float
     original_end_sec: float
+    # Source-time intervals after silence removal. Empty list = legacy clip
+    # produced before this schema landed; treat as a single
+    # [(start_sec, end_sec)] interval (see clip_row_to_dto).
+    intervals: list[ClipInterval] = Field(default_factory=list)
     variants: list[str] = Field(default_factory=lambda: ["original"])
     stale_variants: list[str] = Field(default_factory=list)
     needs_render: bool = True

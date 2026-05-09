@@ -55,6 +55,10 @@ def cuts_path(project: ProjectRow) -> Path:
     return project_dir(project.library, project.id) / "cuts.json"
 
 
+def speech_intervals_path(project: ProjectRow) -> Path:
+    return project_dir(project.library, project.id) / "speech_intervals.json"
+
+
 def clip_path(project: ProjectRow, clip_id: str) -> Path:
     p = project_dir(project.library, project.id) / "clips" / f"{clip_id}.mp4"
     p.parent.mkdir(parents=True, exist_ok=True)
