@@ -85,6 +85,50 @@ export const isPastLastInterval = (
   return sourceSec >= intervals[intervals.length - 1].endSec - 0.01;
 };
 
+// Derive auto-cut markers from a clip's source-time speech intervals.
+// Each gap between consecutive intervals is a removed long-pause: its
+// compact-time position is the cumulative interval duration up to that
+// gap, and its size is the source-time gap itself. afterIdx is the
+// index in the *visible-transcript-segment list* (segments overlapping
+// the clip's outer source-time window) the divider sits below.
+//
+// Today this is the only producer of cuts; when filler-word / repeat /
+// low-value classifiers ship they'll merge into the same array with
+// different `reason` values. The visual system already handles all four.
+import type { Cut, TranscriptSegment } from "./types";
+export const computeLongPauseCuts = (
+  intervals: ClipInterval[],
+  visibleSegments: TranscriptSegment[],
+): Cut[] => {
+  if (intervals.length < 2) return [];
+  const out: Cut[] = [];
+  let compactT = 0;
+  for (let i = 0; i < intervals.length - 1; i++) {
+    const iv = intervals[i];
+    const next = intervals[i + 1];
+    compactT += iv.endSec - iv.startSec;
+    const removedSec = next.startSec - iv.endSec;
+    if (removedSec <= 0.05) continue;
+    // Place the divider after the last visible segment whose end falls
+    // inside this interval (with a small tolerance for the 0.2s
+    // pre/post padding the speech mask bakes into bounds).
+    let afterIdx = -1;
+    for (let s = 0; s < visibleSegments.length; s++) {
+      if (visibleSegments[s].end <= iv.endSec + 0.3) afterIdx = s;
+      else break;
+    }
+    if (afterIdx < 0) continue;
+    out.push({
+      id: `cut-${i}`,
+      t: compactT,
+      afterIdx,
+      reason: "pause",
+      removedSec,
+    });
+  }
+  return out;
+};
+
 
 export const fmtTime = (s: number): string => {
   const h = Math.floor(s / 3600);
@@ -180,6 +224,11 @@ export const generateClips = (projectId: string, count: number): Clip[] => {
       duration: dur,
       startSec: start,
       endSec: start + dur,
+      // Mock data: single interval covering the full source-time window.
+      // Real clips from the backend pipeline come with multiple intervals
+      // when silence has been removed; the mocks just fall back to the
+      // legacy single-band rendering.
+      intervals: [{ startSec: start, endSec: start + dur }],
       variants,
       description:
         "A short, hook-first clip pulled automatically from the source recording. Edit this description before posting.",

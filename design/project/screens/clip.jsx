@@ -1,4 +1,4 @@
-/* global React, Icon, Spinner, useStore, useRouter, Link, fmtTime, SAMPLE_TRANSCRIPT, TrimPanel, DownloadControl, useDownloadManager */
+/* global React, Icon, Spinner, useStore, useRouter, Link, fmtTime, SAMPLE_TRANSCRIPT, TrimPanel, DownloadControl, useDownloadManager, CutDivider, CutTickRail, CutsSummary, REASON_META */
 const { useState, useEffect, useRef, useMemo } = React;
 
 const ClipDetail = ({ projectId, clipId }) => {
@@ -100,6 +100,17 @@ const ClipDetail = ({ projectId, clipId }) => {
 
   const neighbors = clips.map(c => ({ id: c.id, startSec: c.startSec, endSec: c.endSec }));
 
+  // Auto-removed cuts. Long pause is the only reason actually classified today;
+  // filler / repeat / low-value are mocked here so the visual system is visible.
+  // Cut.t is clip-relative (seconds from clip start) — same coordinate space as
+  // SAMPLE_TRANSCRIPT timestamps, which is what the player scrub uses.
+  const cuts = useMemo(() => ([
+    { id: 'c1', t: 4.6,  afterIdx: 1, reason: 'pause',    removedSec: 2.3 },
+    { id: 'c2', t: 11.4, afterIdx: 3, reason: 'filler',   removedSec: 0.6 },
+    { id: 'c3', t: 21.2, afterIdx: 6, reason: 'repeat',   removedSec: 1.4 },
+    { id: 'c4', t: 24.7, afterIdx: 7, reason: 'lowvalue', removedSec: 3.3 },
+  ]), [clip.id]);
+
   const onSaveTrim = (startSec, endSec) => {
     const original = clip.original || { startSec: clip.startSec, endSec: clip.endSec };
     // Anything that was previously generated becomes stale.
@@ -135,6 +146,18 @@ const ClipDetail = ({ projectId, clipId }) => {
     const next = SAMPLE_TRANSCRIPT[i + 1];
     return currentSec >= line.t && (!next || currentSec < next.t);
   });
+
+  // Active cut: the one closest to the playhead within a small window. Mirrors
+  // the active-transcript-line beat so the divider gets a brief subtle highlight.
+  let activeCutId = null;
+  if (playing) {
+    const HIT = 0.45;
+    let bestDist = HIT;
+    for (const c of cuts) {
+      const d = Math.abs(currentSec - c.t);
+      if (d < bestDist) { activeCutId = c.id; bestDist = d; }
+    }
+  }
 
   return (
     <div className="page" style={{ maxWidth: 1400 }}>
@@ -187,6 +210,7 @@ const ClipDetail = ({ projectId, clipId }) => {
             setPlaying={setPlaying}
             scrub={scrub}
             setScrub={setScrub}
+            cuts={cuts}
           />
           <ActionBar
             hasCaptions={hasCaptions}
@@ -196,11 +220,14 @@ const ClipDetail = ({ projectId, clipId }) => {
             onGenCaptions={() => setGenerating('captions')}
             onGenReframe={() => setGenerating('reframe')}
           />
+          <CutsSummary cuts={cuts}/>
           <Transcript
             currentSec={currentSec}
             activeIdx={activeWordIdx}
             previewBand={previewBand}
             clipStart={clip.original?.startSec ?? clip.startSec}
+            cuts={cuts}
+            activeCutId={activeCutId}
           />
         </main>
 
@@ -322,7 +349,7 @@ const StaleWarning = ({ variants, onRegenerate, generating }) => {
   );
 };
 
-const Player = ({ clip, variant, playing, setPlaying, scrub, setScrub }) => {
+const Player = ({ clip, variant, playing, setPlaying, scrub, setScrub, cuts = [] }) => {
   const seed = clip.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   const h1 = (seed * 11) % 360;
   const h2 = (h1 + 60) % 360;
@@ -433,9 +460,11 @@ const Player = ({ clip, variant, playing, setPlaying, scrub, setScrub }) => {
             const rect = e.currentTarget.getBoundingClientRect();
             setScrub((e.clientX - rect.left) / rect.width);
           }}
-          style={{ flex: 1, height: 4, background: 'oklch(1 0 0 / 0.15)', borderRadius: 999, cursor: 'pointer' }}
+          style={{ flex: 1, height: 4, background: 'oklch(1 0 0 / 0.15)', borderRadius: 999, cursor: 'pointer', position: 'relative' }}
         >
           <div style={{ height: '100%', width: `${scrub * 100}%`, background: 'var(--accent)', borderRadius: 999 }}/>
+          {/* Auto-cut tick marks. Tooltip-on-hover; rail itself ignores pointer events so click-to-scrub still works through the ticks. */}
+          {cuts.length > 0 && <CutTickRail cuts={cuts} durationSec={clip.duration}/>}
         </div>
       </div>
     </div>
@@ -505,7 +534,14 @@ const ActionButton = ({ label, icon, active, progress, status, done, onClick, di
   );
 };
 
-const Transcript = ({ currentSec, activeIdx, previewBand, clipStart }) => (
+const Transcript = ({ currentSec, activeIdx, previewBand, clipStart, cuts = [], activeCutId = null }) => {
+  // Index cuts by the segment they sit *after*, so we can render a divider
+  // immediately under that segment row.
+  const cutsAfter = {};
+  for (const c of cuts) {
+    (cutsAfter[c.afterIdx] ||= []).push(c);
+  }
+  return (
   <div className="card" style={{ marginTop: 20, padding: 20 }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
       <div>
@@ -566,10 +602,25 @@ const Transcript = ({ currentSec, activeIdx, previewBand, clipStart }) => (
             </span>
           </div>
         );
+      }).flatMap((node, i) => {
+        // After each segment row, splice in any cut dividers that belong here.
+        const after = cutsAfter[i];
+        if (!after) return [node];
+        return [
+          node,
+          ...after.map(cut => (
+            <CutDivider
+              key={`cut-${cut.id}`}
+              cut={cut}
+              active={activeCutId === cut.id}
+            />
+          )),
+        ];
       })}
     </div>
   </div>
-);
+  );
+};
 
 const MetaCard = ({ clip, updateClip }) => {
   return (

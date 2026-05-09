@@ -119,6 +119,24 @@ export type TranscriptLine = { t: number; text: string };
 // faster-whisper segments with absolute source-time start/end.
 export type TranscriptSegment = { start: number; end: number; text: string };
 
+// Reasons the auto-cutter can remove material from a clip. Today only
+// `pause` is real (computed from the speech mask); the other three are
+// designed for so the visual system already accommodates them when we
+// land filler-word / repeat-phrase / low-value classifiers.
+export type CutReason = "pause" | "filler" | "repeat" | "lowvalue";
+
+// One automatic cut surfaced to the user. `t` is clip-relative compact
+// time (0 = first frame the user sees), `afterIdx` is the index in the
+// clip-window-visible transcript-segment list after which the cut sits,
+// `removedSec` is the source-time duration the cutter took out.
+export type Cut = {
+  id: string;
+  t: number;
+  afterIdx: number;
+  reason: CutReason;
+  removedSec: number;
+};
+
 export type ProjectDraft = {
   name: string;
   prompt: string;

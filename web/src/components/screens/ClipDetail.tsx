@@ -6,6 +6,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
   compactToSource,
+  computeLongPauseCuts,
   fmtDuration,
   fmtTime,
   isPastLastInterval,
@@ -15,10 +16,12 @@ import {
 import { Icon, Spinner } from "@/lib/icons";
 import { TrimPanel } from "@/components/TrimPanel";
 import { DownloadControl } from "@/components/DownloadControl";
+import { CutDivider, CutTickRail, CutsSummary } from "@/components/Cuts";
 import type {
   Clip,
   ClipInterval,
   ClipVariant,
+  Cut,
   StageState,
   TranscriptSegment,
 } from "@/lib/types";
@@ -208,6 +211,38 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
     endSec: c.endSec,
   }));
 
+  // Auto-removed cuts surfaced on the transcript and the player scrubber.
+  // Today these are derived from the speech mask (long-pause removals);
+  // when filler/repeat/low-value classifiers ship they'll merge into the
+  // same array with different `reason` values.
+  const visibleSegments = transcript.filter(
+    (seg) => seg.end > clip.startSec && seg.start < clip.endSec,
+  );
+  const cuts: Cut[] = computeLongPauseCuts(clip.intervals, visibleSegments);
+
+  // Active cut: the one nearest the playhead within a small window — gives
+  // the divider the same brief subtle highlight beat the active transcript
+  // line uses. Compact-time clipTime drives this; reframe playback (which
+  // plays a pre-rendered file) is treated as compact already.
+  const reframeActive =
+    variant === "reframe" &&
+    clip.variants.includes("reframe") &&
+    !(clip.staleVariants ?? []).includes("reframe");
+  const compactNow = reframeActive
+    ? currentSec
+    : sourceToCompact(currentSec, clip.intervals);
+  let activeCutId: string | null = null;
+  if (isPlaying && cuts.length > 0) {
+    let bestDist = 0.5;
+    for (const c of cuts) {
+      const d = Math.abs(compactNow - c.t);
+      if (d < bestDist) {
+        activeCutId = c.id;
+        bestDist = d;
+      }
+    }
+  }
+
   const onSaveTrim = async (startSec: number, endSec: number) => {
     const updated = await updateClipBounds(clipId, { startSec, endSec });
     if (updated) {
@@ -302,6 +337,7 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
             setIsPlaying={setIsPlaying}
             currentSec={currentSec}
             setCurrentSec={setCurrentSec}
+            cuts={cuts}
           />
           <ActionBar
             hasReframe={hasReframe}
@@ -309,12 +345,15 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
             genProgress={generating === "reframe" ? -1 : 0}
             onGenReframe={() => void startReframeGeneration()}
           />
+          <CutsSummary cuts={cuts} />
           <Transcript
             segments={transcript}
             clip={clip}
             currentSec={currentSec}
             previewBand={previewBand}
             transcribeStage={project.pipeline.transcribe}
+            cuts={cuts}
+            activeCutId={activeCutId}
           />
         </main>
 
@@ -438,6 +477,7 @@ const Player = ({
   setIsPlaying,
   currentSec,
   setCurrentSec,
+  cuts,
 }: {
   clip: Clip;
   projectId: string;
@@ -447,6 +487,7 @@ const Player = ({
   setIsPlaying: (p: boolean) => void;
   currentSec: number;
   setCurrentSec: (s: number) => void;
+  cuts: Cut[];
 }) => {
   // The 9:16 variant plays a pre-rendered MP4 that's already silence-
   // removed, so we drop the source-time skip-silence machinery and treat
@@ -670,6 +711,7 @@ const Player = ({
             background: "oklch(1 0 0 / 0.15)",
             borderRadius: 999,
             cursor: "pointer",
+            position: "relative",
           }}
         >
           <div
@@ -680,6 +722,12 @@ const Player = ({
               borderRadius: 999,
             }}
           />
+          {/* Auto-cut tick marks. The rail itself is pointer-events:none
+              so click-to-scrub still passes through; ticks re-enable
+              pointer events for their own hover tooltip. */}
+          {cuts.length > 0 && clip.duration > 0 && (
+            <CutTickRail cuts={cuts} durationSec={clip.duration} />
+          )}
         </div>
       </div>
     </div>
@@ -789,16 +837,27 @@ const Transcript = ({
   currentSec,
   previewBand,
   transcribeStage,
+  cuts,
+  activeCutId,
 }: {
   segments: TranscriptSegment[];
   clip: Clip;
   currentSec: number;
   previewBand: PreviewBand;
   transcribeStage: StageState;
+  cuts: Cut[];
+  activeCutId: string | null;
 }) => {
   const visible = segments.filter(
     (seg) => seg.end > clip.startSec && seg.start < clip.endSec,
   );
+
+  // Index cuts by the segment they sit *after* so we can splice each
+  // divider directly under its anchor row.
+  const cutsAfter = cuts.reduce<Record<number, Cut[]>>((acc, c) => {
+    (acc[c.afterIdx] ||= []).push(c);
+    return acc;
+  }, {});
 
   // The empty-segments case has three distinct meanings depending on the
   // pipeline state. Conflating them as "not finished" was actively
@@ -863,7 +922,7 @@ const Transcript = ({
             No transcript content within this clip&apos;s window.
           </div>
         ) : (
-          visible.map((seg, i) => {
+          visible.flatMap((seg, i) => {
             const isActive =
               currentSec >= seg.start && currentSec < seg.end;
 
@@ -881,9 +940,9 @@ const Transcript = ({
             const dimmed = Boolean(previewBand) && !inPreview;
             const highlighted = isActive || (Boolean(previewBand) && inPreview);
 
-            return (
+            const segNode = (
               <div
-                key={i}
+                key={`seg-${i}`}
                 style={{
                   display: "flex",
                   gap: 14,
@@ -923,6 +982,20 @@ const Transcript = ({
                 </span>
               </div>
             );
+
+            // Splice in any dividers that anchor to this segment.
+            const after = cutsAfter[i];
+            if (!after || after.length === 0) return [segNode];
+            return [
+              segNode,
+              ...after.map((cut) => (
+                <CutDivider
+                  key={`cut-${cut.id}`}
+                  cut={cut}
+                  active={activeCutId === cut.id}
+                />
+              )),
+            ];
           })
         )}
       </div>
