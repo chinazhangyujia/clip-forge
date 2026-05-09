@@ -38,7 +38,9 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
 
   const [variant, setVariant] = useState<ClipVariant>("original");
   const [isPlaying, setIsPlaying] = useState(false);
-  // currentSec is in source-time. Driven by the <video> element's events.
+  // currentSec is in source-time when playing the source URL with the
+  // skip-silence logic, and rendered-file time (= compact time) when
+  // playing a pre-rendered variant. Driven by the <video> element's events.
   const [currentSec, setCurrentSec] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   // Project-level speech mask — used as a backdrop in the trim panel and
@@ -46,11 +48,12 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
   // drag. Empty array = legacy project with no mask, in which case the
   // trim panel falls back to single-band rendering.
   const [projectSpeechMask, setProjectSpeechMask] = useState<ClipInterval[]>([]);
-  // Variant generation (reframe) isn't implemented yet — `generating` stays
-  // null and the UI shows a "coming soon" toast. Captions were dropped from
-  // MVP entirely; see lib/types.ts for the rationale.
-  const [generating] = useState<GenKind>(null);
-  const [genProgress] = useState(0);
+  // `generating` is set to a variant key while the backend job is in
+  // flight. The Generate button shows a spinner; we poll loadClips on a
+  // timer and clear when the variant appears in clip.variants (and isn't
+  // marked stale). Captions were dropped from MVP entirely; see
+  // lib/types.ts for the rationale.
+  const [generating, setGenerating] = useState<GenKind>(null);
   const [previewBand, setPreviewBand] = useState<PreviewBand>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -77,15 +80,52 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
     };
   }, [projectId]);
 
-  // Seek the video to the clip's start when navigating to a new clip or
-  // after a trim save changes the bounds.
-  const clipStartSec = clip?.startSec ?? 0;
+  // Poll the clip list while a variant is generating so the UI flips out
+  // of "Generating…" automatically when the worker finishes the render.
+  // Each tick reuses the existing loadClips fetch — no special endpoint.
   useEffect(() => {
-    const v = videoRef.current;
-    if (v && v.readyState >= 1) {
-      v.currentTime = clipStartSec;
+    if (!generating) return;
+    const tick = setInterval(() => {
+      loadClips(projectId);
+    }, 2500);
+    return () => clearInterval(tick);
+  }, [generating, projectId, loadClips]);
+
+  // Detect completion: when the requested variant appears in clip.variants
+  // and isn't stale, flip out of the generating state, switch the active
+  // tab to it, and tell the user. Uses the React 19 tracker pattern (see
+  // the InlineEdit component below for the canonical use) — an effect
+  // with setState would trip the strict next/react-hooks lint.
+  const [prevReadyVariant, setPrevReadyVariant] = useState<GenKind>(null);
+  const readyVariant: GenKind =
+    generating != null &&
+    clip != null &&
+    clip.variants.includes(generating) &&
+    !(clip.staleVariants ?? []).includes(generating)
+      ? generating
+      : null;
+  if (readyVariant !== prevReadyVariant) {
+    setPrevReadyVariant(readyVariant);
+    if (readyVariant != null) {
+      setGenerating(null);
+      setVariant(readyVariant);
+      // Toasts are a side effect; defer to next tick so we're not
+      // queuing one during render.
+      const v = readyVariant;
+      queueMicrotask(() =>
+        pushToast({
+          kind: "success",
+          title: "Vertical reframe ready",
+          body: "Switched to the 9:16 view.",
+        }),
+      );
+      void v;
     }
-  }, [clipId, clipStartSec]);
+  }
+
+  // The Player owns its own seek-on-clip-change logic — it knows the
+  // active variant (source vs. reframe) and what the right start
+  // position is for each.
 
   // Local edits for in-memory metadata (title, hashtags, etc.) — not yet
   // persisted to backend. Trim bounds go through the real updateClipBounds.
@@ -101,12 +141,24 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
     }
   };
 
-  const stubVariantGenerate = () => {
-    pushToast({
-      kind: "info",
-      title: "Vertical reframe coming soon",
-      body: "Camera-follow 9:16 reframe isn't implemented yet.",
-    });
+  const startReframeGeneration = async () => {
+    if (generating) return;
+    setGenerating("reframe");
+    try {
+      await api.generateReframe(clipId);
+      pushToast({
+        kind: "info",
+        title: "Generating vertical reframe…",
+        body: "Detecting the speaker and cropping to 9:16. This usually takes 30-60 seconds.",
+      });
+    } catch (e) {
+      setGenerating(null);
+      pushToast({
+        kind: "error",
+        title: "Couldn't start reframe",
+        body: String(e instanceof Error ? e.message : e),
+      });
+    }
   };
 
   if (!project || !clip) {
@@ -168,12 +220,9 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
   };
 
   const regenerate = (key: ClipVariant) => {
-    if (key === "original") return;
-    pushToast({
-      kind: "info",
-      title: "Vertical reframe regeneration coming soon",
-      body: "Camera-follow 9:16 reframe isn't implemented yet.",
-    });
+    if (key === "reframe") {
+      void startReframeGeneration();
+    }
   };
 
   return (
@@ -221,7 +270,9 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
             variants={variants}
             active={variant}
             setActive={setVariant}
-            onGenerate={() => stubVariantGenerate()}
+            onGenerate={(k) => {
+              if (k === "reframe") void startReframeGeneration();
+            }}
             generating={generating}
           />
           {anyStale && (
@@ -255,8 +306,8 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
           <ActionBar
             hasReframe={hasReframe}
             generating={generating}
-            genProgress={genProgress}
-            onGenReframe={stubVariantGenerate}
+            genProgress={generating === "reframe" ? -1 : 0}
+            onGenReframe={() => void startReframeGeneration()}
           />
           <Transcript
             segments={transcript}
@@ -397,9 +448,34 @@ const Player = ({
   currentSec: number;
   setCurrentSec: (s: number) => void;
 }) => {
+  // The 9:16 variant plays a pre-rendered MP4 that's already silence-
+  // removed, so we drop the source-time skip-silence machinery and treat
+  // it as a single interval [0, clip.duration]. Source playback keeps
+  // the multi-interval logic that jumps over removed pauses live.
+  const reframeReady =
+    clip.variants.includes("reframe") &&
+    !(clip.staleVariants ?? []).includes("reframe");
+  const usingReframe = variant === "reframe" && reframeReady;
   const isVertical = variant === "reframe";
-  const intervals = clip.intervals;
+
+  const intervals: ClipInterval[] = usingReframe
+    ? [{ startSec: 0, endSec: clip.duration }]
+    : clip.intervals;
   const firstStart = intervals[0]?.startSec ?? clip.startSec;
+  const videoSrc = usingReframe
+    ? api.variantUrl(clip.id, "reframe")
+    : api.sourceUrl(projectId);
+
+  // When the user switches clips inside the same project, the source
+  // <video> element is reused (sourceUrl is project-scoped) and won't
+  // emit `loadedmetadata` again — manually seek to this clip's start.
+  // For reframe playback the variant URL changes per clip so a fresh
+  // load fires automatically; this effect just no-ops in that case.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v && v.readyState >= 1) v.currentTime = firstStart;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.id, firstStart, usingReframe]);
 
   // Clip-relative time for the controls + cold-open hook gating. With
   // silence removal, this is COMPACT time — `clip.duration` already comes
@@ -477,7 +553,7 @@ const Player = ({
       >
         <video
           ref={videoRef}
-          src={api.sourceUrl(projectId)}
+          src={videoSrc}
           playsInline
           preload="metadata"
           onPlay={() => setIsPlaying(true)}

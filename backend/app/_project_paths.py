@@ -65,6 +65,14 @@ def clip_path(project: ProjectRow, clip_id: str) -> Path:
     return p
 
 
+def clip_variant_path(project: ProjectRow, clip_id: str, variant: str) -> Path:
+    """Path for a non-original variant of a clip — the 9:16 vertical
+    reframe lives at clips/{id}-reframe.mp4 alongside the original."""
+    p = project_dir(project.library, project.id) / "clips" / f"{clip_id}-{variant}.mp4"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def delete_project_dir(library: str | None, project_id: str) -> None:
     root = Path(library) if library else settings.workspace_dir
     target = root / project_id

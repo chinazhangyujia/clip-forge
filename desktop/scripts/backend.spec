@@ -49,6 +49,10 @@ for pkg in (
     # zhconv ships its conversion table as zhcdict.json — needs collect_all
     # to bundle the data file alongside the .py code.
     "zhconv",
+    # cv2 ships Haar cascade XML files under cv2/data/ that the reframe
+    # pipeline loads at runtime. collect_all picks up both the native
+    # binaries and the data dir.
+    "cv2",
 ):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
@@ -94,6 +98,7 @@ hiddenimports += [
     "app._resources",
     "app.jobs",
     "app.pipeline",
+    "app.reframe",
     "app.schemas",
     "app.silence",
     "app.blobstore.local",

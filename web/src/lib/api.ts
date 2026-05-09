@@ -227,6 +227,21 @@ export const api = {
 
   clipDownloadUrl: (clipId: string): string => `${baseUrl()}/clips/${clipId}/download`,
 
+  // 9:16 vertical reframe is rendered asynchronously by a background job.
+  // The frontend POSTs to kick off, then polls the regular `listClips`
+  // endpoint until `variants` contains "reframe" and it isn't stale.
+  generateReframe: async (clipId: string): Promise<Clip> => {
+    return jsonOrThrow(
+      await fetch(`${baseUrl()}/clips/${clipId}/reframe`, { method: "POST" }),
+    );
+  },
+
+  // URL for a non-original clip variant. Currently only "reframe" exists.
+  // The backend marks this response no-store so a regenerated variant
+  // never gets served from a stale WebView cache.
+  variantUrl: (clipId: string, variant: "reframe"): string =>
+    `${baseUrl()}/clips/${clipId}/variants/${variant}`,
+
   sourceUrl: (projectId: string): string => `${baseUrl()}/projects/${projectId}/source`,
 
   artifactUrl: (

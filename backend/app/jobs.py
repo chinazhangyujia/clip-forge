@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 KIND_PIPELINE = "pipeline"
 KIND_RENDER_CLIP = "render_clip"
+KIND_RENDER_REFRAME = "render_reframe"
 
 POLL_INTERVAL_SEC = 1.0
 
@@ -55,6 +56,20 @@ async def enqueue_render_clip(project_id: str, clip_id: str) -> str:
         project_id=project_id,
         clip_id=clip_id,
         kind=KIND_RENDER_CLIP,
+        status="pending",
+        created_at=_now_ms(),
+    )
+    await ds.enqueue_job(job)
+    return job.id
+
+
+async def enqueue_render_reframe(project_id: str, clip_id: str) -> str:
+    ds = get_datastore()
+    job = JobRow(
+        id=_new_id("j"),
+        project_id=project_id,
+        clip_id=clip_id,
+        kind=KIND_RENDER_REFRAME,
         status="pending",
         created_at=_now_ms(),
     )
@@ -191,6 +206,21 @@ async def _run_render_clip(project_id: str, clip_id: str) -> None:
     await ds.update_clip(clip_id, {"needs_render": False, "updated_at": _now_ms()})
 
 
+async def _run_render_reframe(project_id: str, clip_id: str) -> None:
+    ds = get_datastore()
+    clip = await ds.get_clip(clip_id)
+    if clip is None:
+        raise RuntimeError(f"Clip {clip_id} not found")
+    intervals = [(iv.start_sec, iv.end_sec) for iv in clip.intervals] or [
+        (clip.start_sec, clip.end_sec)
+    ]
+    await pipeline.slice_clip_reframe(project_id, clip_id, intervals)
+    fields: dict = {"updated_at": _now_ms()}
+    fields["variants"] = sorted(set(clip.variants) | {"reframe"})
+    fields["stale_variants"] = [v for v in clip.stale_variants if v != "reframe"]
+    await ds.update_clip(clip_id, fields)
+
+
 # ---------- worker loop ----------
 
 
@@ -202,6 +232,9 @@ async def _execute_job(job: JobRow) -> None:
         elif job.kind == KIND_RENDER_CLIP:
             assert job.clip_id is not None
             await _run_render_clip(job.project_id, job.clip_id)
+        elif job.kind == KIND_RENDER_REFRAME:
+            assert job.clip_id is not None
+            await _run_render_reframe(job.project_id, job.clip_id)
         else:
             raise RuntimeError(f"Unknown job kind: {job.kind}")
         await ds.mark_job_done(job.id)
