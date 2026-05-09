@@ -49,7 +49,9 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8
+        # v8 is "immutable releases only" (no floating major tag). v7 is the
+        # last branch with a floating major tag; same Node 24 runtime.
+        uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
 
