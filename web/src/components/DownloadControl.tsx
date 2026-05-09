@@ -256,7 +256,6 @@ export const DownloadControl = ({
 
   const start = useCallback(
     (variantKey: ClipVariant) => {
-      if (variantKey !== "original") return;
       if (job) return; // duplicate-click guard
 
       const abort = new AbortController();
@@ -279,11 +278,20 @@ export const DownloadControl = ({
         indeterminate: true,
       });
 
+      // Original = lazily-rendered 16:9 source-cut. Reframe = pre-rendered
+      // 9:16 vertical variant served from /clips/{id}/variants/reframe.
+      // Suffix the filename so the user gets two distinguishable files
+      // when they download both variants.
+      const url =
+        variantKey === "reframe"
+          ? api.variantUrl(clip.id, "reframe")
+          : api.clipDownloadUrl(clip.id);
+      const filename =
+        variantKey === "reframe" ? `${safeName} (9x16).mp4` : `${safeName}.mp4`;
+
       (async () => {
         try {
-          const res = await fetch(api.clipDownloadUrl(clip.id), {
-            signal: abort.signal,
-          });
+          const res = await fetch(url, { signal: abort.signal });
           if (!res.ok) {
             throw new Error(`Server returned ${res.status}`);
           }
@@ -292,14 +300,14 @@ export const DownloadControl = ({
           const blob = await res.blob();
 
           // Trigger the browser's save dialog with a synthetic anchor click.
-          const url = URL.createObjectURL(blob);
+          const objUrl = URL.createObjectURL(blob);
           const a = document.createElement("a");
-          a.href = url;
-          a.download = `${safeName}.mp4`;
+          a.href = objUrl;
+          a.download = filename;
           document.body.appendChild(a);
           a.click();
           a.remove();
-          URL.revokeObjectURL(url);
+          URL.revokeObjectURL(objUrl);
 
           setJob((prev) => (prev ? { ...prev, phase: "done" } : prev));
           // Brief 1s success flash, then collapse and toast.
@@ -309,7 +317,7 @@ export const DownloadControl = ({
             pushToast({
               kind: "success",
               title: "Download ready",
-              body: `${safeName}.mp4 saved`,
+              body: `${filename} saved`,
               duration: 5000,
             });
           }, 1000);
@@ -372,7 +380,18 @@ export const DownloadControl = ({
             <span>Available Variants</span>
           </div>
           {variants.map((v) => {
-            const enabled = v.has && v.key === "original";
+            // Original is always rendered on demand; non-original variants
+            // need a successful prior render and not be marked stale.
+            const enabled =
+              v.key === "original" || (v.has && !v.stale);
+            const tooltip =
+              v.key === "original"
+                ? ""
+                : !v.has
+                  ? "Generate this variant first."
+                  : v.stale
+                    ? "Stale — regenerate before downloading."
+                    : "";
             return (
               <button
                 key={v.key}
@@ -382,11 +401,7 @@ export const DownloadControl = ({
                   setOpen(false);
                   start(v.key);
                 }}
-                title={
-                  v.key === "original"
-                    ? ""
-                    : "Variant generation not yet implemented"
-                }
+                title={tooltip}
                 style={{
                   display: "flex",
                   width: "100%",
