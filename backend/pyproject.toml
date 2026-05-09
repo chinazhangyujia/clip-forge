@@ -12,6 +12,9 @@ dependencies = [
     "anthropic>=0.40",
     "openai>=1.50",
     "faster-whisper>=1.0",
+    # Whisper sometimes emits Traditional Chinese for Mandarin audio. We
+    # post-process to Simplified for the China-mainland deployment.
+    "zhconv>=1.4",
 ]
 
 [project.optional-dependencies]

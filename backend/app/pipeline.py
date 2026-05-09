@@ -140,13 +140,23 @@ def _get_whisper_model():
     return _whisper_model
 
 
-def _transcribe_sync(audio: Path) -> list[dict]:
+def _transcribe_sync(audio: Path) -> tuple[list[dict], str]:
     model = _get_whisper_model()
-    segments, _info = model.transcribe(str(audio), beam_size=1, vad_filter=True)
+    segments, info = model.transcribe(str(audio), beam_size=1, vad_filter=True)
     out = []
     for seg in segments:
         out.append({"start": float(seg.start), "end": float(seg.end), "text": seg.text})
-    return out
+    return out, info.language
+
+
+def _to_simplified_chinese(segments: list[dict]) -> None:
+    """Whisper sometimes emits Traditional characters for Mandarin audio,
+    even on mainland-China sources. Convert in place; the conversion table
+    is purely Python and is bundled into the desktop installer."""
+    from zhconv import convert
+
+    for seg in segments:
+        seg["text"] = convert(seg["text"], "zh-cn")
 
 
 async def transcribe(project_id: str) -> list[dict]:
@@ -165,7 +175,9 @@ async def transcribe(project_id: str) -> list[dict]:
     audio_p = pp.audio_path(project)
     if not audio_p.exists():
         await extract_audio(project_id)
-    segments = await asyncio.to_thread(_transcribe_sync, audio_p)
+    segments, lang = await asyncio.to_thread(_transcribe_sync, audio_p)
+    if lang == "zh":
+        _to_simplified_chinese(segments)
     transcript_p.write_text(json.dumps(segments, indent=2, ensure_ascii=False))
     return segments
 

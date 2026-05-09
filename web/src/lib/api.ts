@@ -235,8 +235,12 @@ export const api = {
   ): string => `${baseUrl()}/projects/${projectId}/artifacts/${name}`,
 
   fetchTranscript: async (projectId: string): Promise<TranscriptSegment[]> => {
+    // `cache: "no-store"` defends against a stale 404 cached during the
+    // window where the pipeline was still running — without this the
+    // transcript panel can show "not finished" indefinitely.
     const res = await fetch(
       `${baseUrl()}/projects/${projectId}/artifacts/transcript.json`,
+      { cache: "no-store" },
     );
     if (!res.ok) return [];
     return (await res.json()) as TranscriptSegment[];

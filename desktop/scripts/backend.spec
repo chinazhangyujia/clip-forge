@@ -46,6 +46,9 @@ for pkg in (
     "tqdm",
     "av",
     "onnxruntime",
+    # zhconv ships its conversion table as zhcdict.json — needs collect_all
+    # to bundle the data file alongside the .py code.
+    "zhconv",
 ):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)

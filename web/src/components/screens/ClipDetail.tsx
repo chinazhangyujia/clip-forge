@@ -8,7 +8,7 @@ import { fmtDuration, fmtTime } from "@/lib/utils";
 import { Icon, Spinner } from "@/lib/icons";
 import { TrimPanel } from "@/components/TrimPanel";
 import { DownloadControl } from "@/components/DownloadControl";
-import type { Clip, ClipVariant, TranscriptSegment } from "@/lib/types";
+import type { Clip, ClipVariant, StageState, TranscriptSegment } from "@/lib/types";
 
 type GenKind = "reframe" | null;
 
@@ -241,6 +241,7 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
             clip={clip}
             currentSec={currentSec}
             previewBand={previewBand}
+            transcribeStage={project.pipeline.transcribe}
           />
         </main>
 
@@ -674,20 +675,41 @@ const Transcript = ({
   clip,
   currentSec,
   previewBand,
+  transcribeStage,
 }: {
   segments: TranscriptSegment[];
   clip: Clip;
   currentSec: number;
   previewBand: PreviewBand;
+  transcribeStage: StageState;
 }) => {
   const visible = segments.filter(
     (seg) => seg.end > clip.startSec && seg.start < clip.endSec,
   );
 
+  // The empty-segments case has three distinct meanings depending on the
+  // pipeline state. Conflating them as "not finished" was actively
+  // misleading: a user with rendered clips could see the message even
+  // though transcribe had clearly completed.
+  const transcribeNotDone =
+    transcribeStage === "queued" || transcribeStage === "running";
+  const transcribeFailed = transcribeStage === "failed";
+
+  const emptyMessage =
+    segments.length === 0
+      ? transcribeFailed
+        ? "Transcribe stage failed — re-run the project from the Pipeline panel to try again."
+        : transcribeNotDone
+          ? "Transcribe stage hasn't finished — refresh after pipeline completes."
+          : "Transcribe finished, but produced no segments. Whisper found no speech in the audio."
+      : null;
+
   const sub = previewBand
     ? "Previewing new boundaries…"
     : segments.length === 0
-      ? "Transcript not yet available"
+      ? transcribeNotDone
+        ? "Transcript not yet available"
+        : "No transcript segments"
       : "Highlights as the clip plays";
 
   return (
@@ -707,7 +729,7 @@ const Transcript = ({
         <span style={{ fontSize: 11, color: "var(--fg-faint)" }}>Read-only</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {segments.length === 0 ? (
+        {emptyMessage !== null ? (
           <div
             style={{
               color: "var(--fg-faint)",
@@ -715,7 +737,7 @@ const Transcript = ({
               padding: "8px 4px",
             }}
           >
-            (Transcribe stage hasn&apos;t finished — refresh after pipeline completes.)
+            {emptyMessage}
           </div>
         ) : visible.length === 0 ? (
           <div

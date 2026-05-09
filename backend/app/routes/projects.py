@@ -202,6 +202,14 @@ async def rerun_project(project_id: str) -> Project:
     existing = await ds.get_project(project_id)
     if existing is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    # Clear cached pipeline artifacts so transcribe/cut actually re-run.
+    # `pipeline.transcribe()` and `propose_cuts()` short-circuit when the
+    # output JSON already exists on disk — that's a useful optimization for
+    # mid-pipeline retry, but defeats Re-run when the user is intentionally
+    # asking for fresh output (e.g. after a backend update changed how
+    # transcripts are normalized). The source video is left untouched.
+    pp.transcript_path(existing).unlink(missing_ok=True)
+    pp.cuts_path(existing).unlink(missing_ok=True)
     updated = await ds.update_project(
         project_id,
         {
@@ -288,8 +296,16 @@ async def get_artifact(project_id: str, name: str) -> FileResponse:
     else:  # unreachable — ARTIFACT_MEDIA whitelist is the source of truth
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown artifact {name!r}")
     if not path.exists():
+        # Don't let the WebView cache a 404 — the file is written async by
+        # the pipeline worker and a stale 404 makes the clip detail page
+        # look like transcribe never finished even after it does.
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             f"{name} not yet generated for this project",
+            headers={"Cache-Control": "no-store"},
         )
-    return FileResponse(path, media_type=ARTIFACT_MEDIA[name])
+    return FileResponse(
+        path,
+        media_type=ARTIFACT_MEDIA[name],
+        headers={"Cache-Control": "no-store"},
+    )
