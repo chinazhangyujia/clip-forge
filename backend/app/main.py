@@ -3,10 +3,16 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+# FastAPI's body-parse catch-all raises `starlette.exceptions.HTTPException`,
+# NOT `fastapi.HTTPException` (which is a subclass). Register the handler
+# against the Starlette base so the dispatcher's MRO walk finds us for
+# instances of either class.
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import jobs
 from .blobstore import get_blobstore
@@ -49,8 +55,8 @@ app.add_middleware(
 )
 
 
-@app.exception_handler(HTTPException)
-async def detailed_http_exception_handler(request: Request, exc: HTTPException):
+@app.exception_handler(StarletteHTTPException)
+async def detailed_http_exception_handler(request: Request, exc: StarletteHTTPException):
     # FastAPI's request-body code path catches every exception from
     # `request.form()` / `request.json()` and re-raises a generic 400
     # (`There was an error parsing the body`), discarding the real cause from
