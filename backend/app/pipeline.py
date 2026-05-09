@@ -187,6 +187,68 @@ def _build_speech_intervals(
     )
 
 
+def _fmt_clock(t: float) -> str:
+    """`mm:ss.ss` — easier to eyeball against a video timeline than
+    `123.4s`."""
+    m, s = divmod(max(0.0, t), 60.0)
+    return f"{int(m)}:{s:05.2f}"
+
+
+def _log_silence_cuts(
+    project_id: str,
+    segments: list[dict],
+    intervals: list[silence.SpeechInterval],
+) -> None:
+    """Print one INFO line per pause we removed, with the surrounding
+    transcript text so the user can verify the cuts at a glance."""
+    if len(intervals) < 2:
+        log.info("[%s] silence-removal: 0 cuts (no long pauses found)", project_id)
+        return
+
+    def find_before(t: float) -> str:
+        # Last segment whose end is at or before this time. Walk backward
+        # — segments are time-ordered so the first match is the closest.
+        for seg in reversed(segments):
+            if seg.get("end", 0) <= t + 0.1:
+                return (seg.get("text") or "").strip()[:80]
+        return "(start of source)"
+
+    def find_after(t: float) -> str:
+        # First segment whose start is at or after this time.
+        for seg in segments:
+            if seg.get("start", 0) >= t - 0.1:
+                return (seg.get("text") or "").strip()[:80]
+        return "(end of source)"
+
+    cuts = []
+    for i in range(len(intervals) - 1):
+        a = intervals[i]
+        b = intervals[i + 1]
+        cuts.append((a.src_end, b.src_start, b.src_start - a.src_end))
+    total_removed = sum(c[2] for c in cuts)
+
+    log.info(
+        "[%s] silence-removal: %d cut%s, %.1fs total removed",
+        project_id,
+        len(cuts),
+        "" if len(cuts) == 1 else "s",
+        total_removed,
+    )
+    for i, (cut_start, cut_end, dur) in enumerate(cuts, start=1):
+        before = find_before(cut_start)
+        after = find_after(cut_end)
+        log.info(
+            "[%s]   cut #%d: %s → %s (-%.1fs)  before:%r  after:%r",
+            project_id,
+            i,
+            _fmt_clock(cut_start),
+            _fmt_clock(cut_end),
+            dur,
+            before,
+            after,
+        )
+
+
 async def transcribe(project_id: str) -> list[dict]:
     """Transcribe the source. Skips re-running Whisper if a transcript already
     exists for this project — re-runs of the pipeline (after a downstream
@@ -211,6 +273,9 @@ async def transcribe(project_id: str) -> list[dict]:
             speech_p.write_text(
                 json.dumps(silence.serialize_intervals(ivs), indent=2)
             )
+        else:
+            ivs = silence.deserialize_intervals(json.loads(speech_p.read_text()))
+        _log_silence_cuts(project_id, segments, ivs)
         return segments
     audio_p = pp.audio_path(project)
     if not audio_p.exists():
@@ -229,6 +294,7 @@ async def transcribe(project_id: str) -> list[dict]:
         silence.compact_total(ivs),
         project.source_duration_sec or 0.0,
     )
+    _log_silence_cuts(project_id, segments, ivs)
     return segments
 
 
