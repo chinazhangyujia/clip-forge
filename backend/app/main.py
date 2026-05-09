@@ -1,5 +1,9 @@
 import asyncio
 import logging
+import os
+import platform
+import sys
+import tempfile
 import traceback
 from contextlib import asynccontextmanager
 
@@ -16,6 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import jobs
 from .blobstore import get_blobstore
+from .config import settings
 from .datastore import get_datastore
 from .routes import clips as clips_routes
 from .routes import projects as projects_routes
@@ -55,6 +60,35 @@ app.add_middleware(
 )
 
 
+def _safe_env_snapshot() -> dict[str, object]:
+    """Filesystem + platform info that's typically load-bearing when a
+    multipart upload fails: the temp dir Starlette spools to, the workspace
+    we'd write the source file into, and basic OS identity. Each access is
+    wrapped because a broken environment is exactly when this runs."""
+    snap: dict[str, object] = {}
+    try:
+        snap["platform"] = platform.platform()
+    except Exception as e:  # pragma: no cover
+        snap["platform_error"] = repr(e)
+    try:
+        snap["python"] = sys.version.split(" ", 1)[0]
+    except Exception as e:  # pragma: no cover
+        snap["python_error"] = repr(e)
+    try:
+        td = tempfile.gettempdir()
+        snap["tempdir"] = td
+        snap["tempdir_writable"] = os.access(td, os.W_OK)
+    except Exception as e:  # pragma: no cover
+        snap["tempdir_error"] = repr(e)
+    try:
+        wd = settings.workspace_dir
+        snap["workspace_dir"] = str(wd)
+        snap["workspace_writable"] = wd.exists() and os.access(wd, os.W_OK)
+    except Exception as e:  # pragma: no cover
+        snap["workspace_error"] = repr(e)
+    return snap
+
+
 @app.exception_handler(StarletteHTTPException)
 async def detailed_http_exception_handler(request: Request, exc: StarletteHTTPException):
     # FastAPI's request-body code path catches every exception from
@@ -62,37 +96,57 @@ async def detailed_http_exception_handler(request: Request, exc: StarletteHTTPEx
     # (`There was an error parsing the body`), discarding the real cause from
     # the response. That's a debugging black hole for the desktop bundle —
     # especially on Windows, where temp-file/antivirus/codepage failures all
-    # collapse into the same opaque message. Surface the chained __cause__ so
-    # the user can copy-paste it back to us.
-    if (
+    # collapse into the same opaque message. Surface the chained __cause__,
+    # the full traceback, and an env snapshot so a non-technical user can
+    # copy-paste one block and we can diagnose without another round-trip.
+    is_body_parse_400 = (
         exc.status_code == 400
         and exc.detail == "There was an error parsing the body"
-        and exc.__cause__ is not None
-    ):
+    )
+    if is_body_parse_400:
         cause = exc.__cause__
-        log.exception(
-            "Body parse failed for %s %s — cause: %s: %s",
-            request.method, request.url.path, type(cause).__name__, cause,
-        )
-        cause_summary = "".join(
-            traceback.format_exception_only(type(cause), cause)
-        ).strip()
-        return JSONResponse(
-            status_code=400,
-            content={
-                "detail": "There was an error parsing the body",
-                "cause_type": type(cause).__name__,
-                "cause": cause_summary,
-                "method": request.method,
-                "path": request.url.path,
-            },
-        )
+        body: dict[str, object] = {
+            "detail": "There was an error parsing the body",
+            "method": request.method,
+            "path": request.url.path,
+            "env": _safe_env_snapshot(),
+        }
+        if cause is not None:
+            log.exception(
+                "Body parse failed for %s %s — cause: %s: %s",
+                request.method, request.url.path, type(cause).__name__, cause,
+            )
+            body["cause_type"] = type(cause).__name__
+            body["cause"] = "".join(
+                traceback.format_exception_only(type(cause), cause)
+            ).strip()
+            # Full chained traceback (cause + context). Includes file paths
+            # and line numbers — pinpoints whether the failure was in
+            # tempfile creation, multipart parsing, our route handler, etc.
+            body["traceback"] = "".join(
+                traceback.format_exception(type(cause), cause, cause.__traceback__)
+            ).strip()
+        else:
+            log.error(
+                "Body parse failed for %s %s — no chained __cause__ attached",
+                request.method, request.url.path,
+            )
+            body["cause_type"] = None
+            body["cause"] = "(no underlying exception was attached)"
+        return JSONResponse(status_code=400, content=body)
     return await http_exception_handler(request, exc)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/diag")
+def diag() -> dict[str, object]:
+    """Environment snapshot for triage. Intentionally callable independent
+    of any failure so the frontend can surface it on demand."""
+    return _safe_env_snapshot()
 
 
 app.include_router(projects_routes.router)

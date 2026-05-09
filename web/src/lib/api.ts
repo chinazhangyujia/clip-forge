@@ -45,18 +45,31 @@ function formatUploadError(args: {
 }): string {
   const { url, status, statusText, responseText, file, library } = args;
   let serverDetail = responseText || "(empty body)";
-  let serverCauseLines = "";
+  let causeBlock = "";
+  let tracebackBlock = "";
+  let envBlock = "";
   try {
     const parsed = JSON.parse(responseText) as {
       detail?: string;
       cause?: string;
-      cause_type?: string;
+      cause_type?: string | null;
+      traceback?: string;
+      env?: Record<string, unknown>;
     };
     if (parsed.detail) serverDetail = parsed.detail;
     if (parsed.cause) {
-      serverCauseLines = `\nUnderlying cause${
+      causeBlock = `\nUnderlying cause${
         parsed.cause_type ? ` (${parsed.cause_type})` : ""
       }:\n${parsed.cause}`;
+    }
+    if (parsed.traceback) {
+      tracebackBlock = `\nTraceback:\n${parsed.traceback}`;
+    }
+    if (parsed.env) {
+      const envLines = Object.entries(parsed.env)
+        .map(([k, v]) => `  ${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+        .join("\n");
+      envBlock = `\nBackend environment:\n${envLines}`;
     }
   } catch {
     // Body wasn't JSON — fall back to the raw text.
@@ -74,7 +87,9 @@ function formatUploadError(args: {
     "Server detail:",
     serverDetail,
   ];
-  if (serverCauseLines) lines.push(serverCauseLines);
+  if (causeBlock) lines.push(causeBlock);
+  if (tracebackBlock) lines.push(tracebackBlock);
+  if (envBlock) lines.push(envBlock);
   return lines.join("\n");
 }
 
