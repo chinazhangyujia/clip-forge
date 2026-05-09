@@ -58,9 +58,13 @@ def compute_speech_intervals(
     when word_timestamps=True). Pauses longer than `max_pause_sec` between
     consecutive words start a new interval.
 
-    Intervals carry both source-time bounds and compact-time bounds. The
-    compact timeline starts at 0; between consecutive intervals, exactly
-    `keep_pause_sec` of compact time elapses.
+    The kept pause is *baked into the interval bounds*, not inserted as a
+    compact-time gap: every interval expands by up to `keep_pause_sec / 2`
+    on each side that abuts a long pause, so the renderer (which concats
+    with no gap) and the player (which jumps from `iv[i].end` straight to
+    `iv[i+1].start`) naturally include `keep_pause_sec` of natural breath
+    at every boundary. This is what keeps cuts from sounding like
+    sentences ramming together.
     """
     cleaned = [w for w in words if w.get("end", 0) > w.get("start", 0)]
     if not cleaned:
@@ -80,17 +84,31 @@ def compute_speech_intervals(
             run_end = max(run_end, w["end"])
     runs.append((run_start, run_end))
 
+    half_keep = keep_pause_sec / 2
+
+    def _pre_pad(i: int, s: float) -> float:
+        if i == 0:
+            return padding_sec
+        prev_end = runs[i - 1][1]
+        gap = s - prev_end
+        # Long pause being removed → borrow up to half the kept pause as
+        # lead-in. Short pause case can't reach here (run-merge above).
+        return min(half_keep, gap / 2) if gap > max_pause_sec else padding_sec
+
+    def _post_pad(i: int, e: float) -> float:
+        if i == len(runs) - 1:
+            return padding_sec
+        next_start = runs[i + 1][0]
+        gap = next_start - e
+        return min(half_keep, gap / 2) if gap > max_pause_sec else padding_sec
+
     intervals: list[SpeechInterval] = []
     compact_t = 0.0
     for i, (s, e) in enumerate(runs):
-        # Pad and clamp to source bounds.
-        ps = max(0.0, s - padding_sec)
-        pe = min(source_duration_sec, e + padding_sec)
+        ps = max(0.0, s - _pre_pad(i, s))
+        pe = min(source_duration_sec, e + _post_pad(i, e))
         if pe - ps < MIN_INTERVAL_SEC:
             continue
-        if i > 0 and intervals:
-            # Insert the kept pause between this run and the previous one.
-            compact_t += keep_pause_sec
         dur = pe - ps
         intervals.append(
             SpeechInterval(

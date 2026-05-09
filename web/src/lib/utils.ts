@@ -58,13 +58,21 @@ export const compactToSource = (
 
 // Given the current source-time position, return the start of the next
 // speech interval (so the Player can jump over a removed pause), or null
-// if we're already inside the last interval / past the end.
+// when we're inside an interval, before the first one (the Player's own
+// initial seek covers that), or past the last.
+//
+// The earlier version stopped at the first `iv.startSec > sourceSec`,
+// which fires for *every* later interval — meaning a player inside iv[0]
+// was instantly seeked to iv[1].startSec, and so on, leaving only the
+// final interval reachable. Fix: also short-circuit `null` when the
+// current time falls inside an interval.
 export const nextSpeechSrcTime = (
   sourceSec: number,
   intervals: ClipInterval[],
 ): number | null => {
   for (const iv of intervals) {
     if (sourceSec < iv.startSec - 0.01) return iv.startSec;
+    if (sourceSec <= iv.endSec) return null;
   }
   return null;
 };
