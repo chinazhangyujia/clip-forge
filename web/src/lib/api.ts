@@ -22,6 +22,16 @@ export async function initApi(): Promise<void> {
   }
 }
 
+// btoa() only accepts Latin1, so encode UTF-8 bytes manually before base64.
+// The metadata header carries Chinese filenames and arbitrary prompts, so we
+// can't assume ASCII.
+function utf8ToBase64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const detail = await res.text();
@@ -127,11 +137,20 @@ export const api = {
       const url = `${baseUrl()}/projects`;
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
-      const fd = new FormData();
-      fd.append("name", payload.name);
-      fd.append("prompt", payload.prompt);
-      fd.append("file", payload.file);
-      if (payload.library) fd.append("library", payload.library);
+
+      // Pack metadata into a single base64-JSON header so the request body
+      // can be the raw file bytes. The backend then streams network →
+      // destination file directly, instead of spooling a multi-GB upload to
+      // %TEMP% (which on Windows is on C: and runs ENOSPC for big files).
+      const metaJson = JSON.stringify({
+        name: payload.name,
+        prompt: payload.prompt,
+        filename: payload.file.name,
+        library: payload.library ?? null,
+      });
+      xhr.setRequestHeader("X-Clipforge-Project-Metadata", utf8ToBase64(metaJson));
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
       xhr.upload.addEventListener("progress", (e) => {
         if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
       });
@@ -163,7 +182,7 @@ export const api = {
           library: payload.library,
         })));
       xhr.onabort = () => reject(new Error("Upload aborted"));
-      xhr.send(fd);
+      xhr.send(payload.file);
     }),
 
   updateProject: async (
