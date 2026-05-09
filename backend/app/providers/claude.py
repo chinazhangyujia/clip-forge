@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -256,8 +257,28 @@ class ClaudeProvider(LlmProvider):
         for block in response.content:
             if block.type == "tool_use" and block.name == "propose_cuts":
                 cuts_raw = block.input.get("cuts", [])
+                # Claude occasionally serializes the array as a JSON-string
+                # rather than an actual list (model-output quirk); recover.
+                if isinstance(cuts_raw, str):
+                    try:
+                        cuts_raw = json.loads(cuts_raw)
+                    except json.JSONDecodeError as e:
+                        raise RuntimeError(
+                            f"Claude returned cuts as a non-JSON string: "
+                            f"{cuts_raw[:200]!r}"
+                        ) from e
+                if not isinstance(cuts_raw, list):
+                    raise RuntimeError(
+                        f"Claude returned cuts of unexpected type "
+                        f"{type(cuts_raw).__name__}: {cuts_raw!r}"
+                    )
                 out: list[Cut] = []
                 for c in cuts_raw:
+                    if not isinstance(c, dict):
+                        log.warning(
+                            "Claude returned non-dict cut entry %r — skipping", c
+                        )
+                        continue
                     start = max(0.0, float(c["start_sec"]))
                     end = min(source_duration_sec, float(c["end_sec"]))
                     if end - start < 1.0:

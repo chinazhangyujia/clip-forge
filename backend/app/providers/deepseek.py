@@ -275,8 +275,27 @@ class DeepSeekProvider(LlmProvider):
                 continue
             payload = json.loads(call.function.arguments)
             cuts_raw = payload.get("cuts", [])
+            if isinstance(cuts_raw, str):
+                # Some models nest the array as a JSON-encoded string.
+                try:
+                    cuts_raw = json.loads(cuts_raw)
+                except json.JSONDecodeError as e:
+                    raise RuntimeError(
+                        f"DeepSeek returned cuts as a non-JSON string: "
+                        f"{cuts_raw[:200]!r}"
+                    ) from e
+            if not isinstance(cuts_raw, list):
+                raise RuntimeError(
+                    f"DeepSeek returned cuts of unexpected type "
+                    f"{type(cuts_raw).__name__}: {cuts_raw!r}"
+                )
             out: list[Cut] = []
             for c in cuts_raw:
+                if not isinstance(c, dict):
+                    log.warning(
+                        "DeepSeek returned non-dict cut entry %r — skipping", c
+                    )
+                    continue
                 start = max(0.0, float(c["start_sec"]))
                 end = min(source_duration_sec, float(c["end_sec"]))
                 if end - start < 1.0:
