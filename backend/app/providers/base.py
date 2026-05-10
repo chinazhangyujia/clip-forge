@@ -65,6 +65,33 @@ class LlmProvider(ABC):
         if the polish pass is offline."""
 
 
+def parse_cuts_from_malformed_arguments(text: str) -> list:
+    """Salvage `cuts` entries from a malformed `{"cuts": [...]}` wrapper.
+
+    Used when the OpenAI-compatible tool-call `arguments` string itself
+    fails `json.loads` — typically a missing comma between elements, an
+    unescaped quote in a title, or a truncated stream. Locates the cuts
+    array by name and runs the same partial-array parser, so we ship
+    the complete cut objects that came through instead of failing the
+    whole pipeline.
+
+    Returns [] if the cuts key isn't present, the array start can't be
+    located, or the cuts field is wrapped as a JSON-encoded string
+    (the inner-string path handles that case once the outer parse
+    succeeds; un-escaping a truncated string here is more brittle than
+    worth it).
+    """
+    key_idx = text.find('"cuts"')
+    if key_idx < 0:
+        return []
+    bracket_idx = text.find("[", key_idx)
+    if bracket_idx < 0:
+        return []
+    if '"' in text[key_idx + len('"cuts"'):bracket_idx]:
+        return []
+    return parse_json_array_partial(text[bracket_idx:])
+
+
 def parse_json_array_partial(text: str) -> list:
     """Parse a JSON array that may have been truncated mid-output.
 

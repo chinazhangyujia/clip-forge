@@ -23,6 +23,7 @@ from .base import (
     PolishCut,
     dedupe_cuts,
     flatten_words,
+    parse_cuts_from_malformed_arguments,
     parse_json_array_partial,
     polish_cuts_from_index_ranges,
     render_word_list,
@@ -337,8 +338,28 @@ class DeepSeekProvider(LlmProvider):
         for call in message.tool_calls or []:
             if call.function.name != "propose_cuts":
                 continue
-            payload = json.loads(call.function.arguments)
-            cuts_raw = payload.get("cuts", [])
+            raw_args = call.function.arguments
+            try:
+                payload = json.loads(raw_args)
+                cuts_raw = payload.get("cuts", [])
+            except json.JSONDecodeError as e:
+                # The arguments string itself is malformed — usually a
+                # missing comma, an unescaped quote in a title, or a
+                # truncated stream. Salvage complete cut objects via
+                # the partial parser instead of failing the pipeline.
+                cuts_raw = parse_cuts_from_malformed_arguments(raw_args)
+                if not cuts_raw:
+                    finish = response.choices[0].finish_reason
+                    raise RuntimeError(
+                        f"DeepSeek returned malformed propose_cuts "
+                        f"arguments ({e}; finish_reason={finish!r}, "
+                        f"len={len(raw_args)}). Head: {raw_args[:200]!r}"
+                    ) from e
+                log.warning(
+                    "DeepSeek tool-call arguments failed to parse (%s); "
+                    "recovered %d complete cut(s) from partial output.",
+                    e, len(cuts_raw),
+                )
             if isinstance(cuts_raw, str):
                 # Some models nest the array as a JSON-encoded string,
                 # which roughly doubles output tokens (every '"' becomes
