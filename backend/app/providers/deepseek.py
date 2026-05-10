@@ -17,7 +17,16 @@ from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
-from .base import Cut, LlmProvider, dedupe_cuts
+from .base import (
+    Cut,
+    LlmProvider,
+    PolishCut,
+    dedupe_cuts,
+    flatten_words,
+    parse_json_array_partial,
+    polish_cuts_from_index_ranges,
+    render_word_list,
+)
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +62,61 @@ CUTTING_SYSTEM_PROMPT = (
     "书写,不要翻译。\n\n"
     "请通过调用 propose_cuts 工具返回你的答案。时间以秒为单位(小数也可)。\n"
 )
+
+POLISH_SYSTEM_PROMPT_ZH = (
+    "你正在为一段录音的逐字稿做润色。给你一份编号的词语列表(带索引),请找出"
+    "讲话人在无意识中说出、人工剪辑师会悄悄移除以让播放更干净的片段。\n\n"
+    "可移除的类别:\n"
+    "- 语气词/填充音:\"嗯\"、\"呃\"、\"啊\"、\"唉\"、\"呐\"、"
+    "\"um\"、\"uh\"、\"er\"、\"ah\"、\"hmm\"、\"mm\" 等。\n"
+    "- 填充短语(只有当它们明显是口头禅,而不是承担实际语义时):\"那个\"、"
+    "\"就是\"、\"然后\"、\"其实\"、\"你知道\"、\"我觉得\"、\"like\"、\"you know\"、"
+    "\"I mean\"、\"basically\"、\"literally\" 等。\n"
+    "- 假开头(说话人重新组织语言时的小重启):\"我- 我觉得\"、\"我们- 我们应该\"。\n"
+    "- 紧邻的重复:\"我我我觉得\"、\"那个那个\"。\n"
+    "- 拖长的犹豫:\"嗯——\"、\"那——个\"、\"soooo\"。\n\n"
+    "请非常保守。只标记明显是口语噪声的范围——不要剪掉刻意的停顿、强调、或者"
+    "上面这些词的真实用法(例如\"你知道吗?\"中的\"你知道\"是真问句,不应剪)。"
+    "拿不准的就保留。每个范围要紧贴噪声本身,不要包含周围有实际意义的词。\n\n"
+    "请通过 propose_polish_cuts 工具按词索引返回范围(from/to 都是闭区间)。"
+)
+
+POLISH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "propose_polish_cuts",
+        "description": "提交需要从录音中剪掉的词索引范围(口头禅、假开头、重复等)。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cuts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": {
+                                "type": "integer",
+                                "description": "起始词索引(闭区间)。",
+                            },
+                            "to": {
+                                "type": "integer",
+                                "description": "结束词索引(闭区间)。",
+                            },
+                            "reason": {
+                                "type": "string",
+                                "enum": ["filler", "repeat"],
+                                "description": "类别:filler=语气词/填充短语,repeat=重复或假开头。",
+                            },
+                        },
+                        "required": ["from", "to", "reason"],
+                    },
+                }
+            },
+            "required": ["cuts"],
+        },
+    },
+}
+
 
 CUTTING_TOOL = {
     "type": "function",
@@ -276,18 +340,37 @@ class DeepSeekProvider(LlmProvider):
             payload = json.loads(call.function.arguments)
             cuts_raw = payload.get("cuts", [])
             if isinstance(cuts_raw, str):
-                # Some models nest the array as a JSON-encoded string.
+                # Some models nest the array as a JSON-encoded string,
+                # which roughly doubles output tokens (every '"' becomes
+                # '\\"'); a truncated wrap leaves us with a malformed
+                # JSON string. parse_json_array_partial salvages the
+                # complete cuts so we ship them rather than failing.
+                raw_text = cuts_raw
                 try:
-                    cuts_raw = json.loads(cuts_raw)
+                    cuts_raw = json.loads(raw_text)
                 except json.JSONDecodeError as e:
-                    raise RuntimeError(
-                        f"DeepSeek returned cuts as a non-JSON string: "
-                        f"{cuts_raw[:200]!r}"
-                    ) from e
+                    cuts_raw = parse_json_array_partial(raw_text)
+                    if not cuts_raw:
+                        raise RuntimeError(
+                            f"DeepSeek returned cuts as an unrecoverable "
+                            f"string: {raw_text[:200]!r}"
+                        ) from e
+                    log.warning(
+                        "DeepSeek returned cuts as a JSON string and was "
+                        "truncated by max_tokens; recovered %d complete "
+                        "cut(s) from the partial output.",
+                        len(cuts_raw),
+                    )
             if not isinstance(cuts_raw, list):
                 raise RuntimeError(
                     f"DeepSeek returned cuts of unexpected type "
                     f"{type(cuts_raw).__name__}: {cuts_raw!r}"
+                )
+            if response.choices[0].finish_reason == "length":
+                log.warning(
+                    "DeepSeek propose_cuts hit max_tokens — output may be "
+                    "incomplete; got %d cut(s).",
+                    len(cuts_raw),
                 )
             out: list[Cut] = []
             for c in cuts_raw:
@@ -306,3 +389,80 @@ class DeepSeekProvider(LlmProvider):
             return out, metrics
 
         raise RuntimeError("DeepSeek returned no propose_cuts tool call")
+
+    async def propose_polish_cuts(
+        self,
+        transcript_segments: list[dict],
+        language: str | None,
+    ) -> list[PolishCut]:
+        words = flatten_words(transcript_segments)
+        if not words:
+            log.info("polish: no word-level data on transcript — skipping")
+            return []
+        word_text = render_word_list(words)
+        user_msg = (
+            f"逐字稿(共 {len(words)} 个词,格式: 索引: 词):\n{word_text}\n\n"
+            "请通过 propose_polish_cuts 工具返回所有需要剪掉的词索引范围。"
+            "记住要保守——只标记明显是口语噪声的部分。"
+        )
+        t0 = time.monotonic()
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=4096,
+                messages=[
+                    {"role": "system", "content": POLISH_SYSTEM_PROMPT_ZH},
+                    {"role": "user", "content": user_msg},
+                ],
+                tools=[POLISH_TOOL],
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": "propose_polish_cuts"},
+                },
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+        except Exception as e:
+            log.warning("polish: DeepSeek call failed (%s) — skipping filler cuts", e)
+            return []
+        elapsed = time.monotonic() - t0
+        usage = response.usage
+        cost = _compute_cost_usd(usage)
+        message = response.choices[0].message
+        for call in message.tool_calls or []:
+            if call.function.name != "propose_polish_cuts":
+                continue
+            try:
+                payload = json.loads(call.function.arguments)
+            except json.JSONDecodeError as e:
+                log.warning("polish: DeepSeek returned non-JSON arguments (%s)", e)
+                return []
+            raw = payload.get("cuts", [])
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.warning("polish: DeepSeek wrapped cuts as string and failed reparse")
+                    return []
+            if not isinstance(raw, list):
+                log.warning(
+                    "polish: DeepSeek returned cuts of type %s — dropping",
+                    type(raw).__name__,
+                )
+                return []
+            cuts = polish_cuts_from_index_ranges(words, raw)
+            log.info(
+                "polish: 1 call, %d in (%d cache_hit, %d cache_miss), %d out, "
+                "$%.4f, %.1fs → %d filler cuts (%d words; lang=%r)",
+                getattr(usage, "prompt_tokens", 0) or 0,
+                getattr(usage, "prompt_cache_hit_tokens", 0) or 0,
+                getattr(usage, "prompt_cache_miss_tokens", 0) or 0,
+                getattr(usage, "completion_tokens", 0) or 0,
+                cost,
+                elapsed,
+                len(cuts),
+                len(words),
+                language,
+            )
+            return cuts
+        log.warning("polish: DeepSeek returned no propose_polish_cuts tool call")
+        return []

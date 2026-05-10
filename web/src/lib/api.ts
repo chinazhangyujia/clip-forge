@@ -1,4 +1,10 @@
-import type { Clip, ClipInterval, Project, TranscriptSegment } from "./types";
+import type {
+  Clip,
+  ClipInterval,
+  Project,
+  ProjectCut,
+  TranscriptSegment,
+} from "./types";
 
 // The backend's base URL. Defaults to NEXT_PUBLIC_API_URL (build-time) or
 // http://localhost:8000 (dev). When running inside the Tauri desktop shell,
@@ -127,6 +133,12 @@ export const api = {
 
   listClips: async (projectId: string): Promise<Clip[]> => {
     return jsonOrThrow(await fetch(`${baseUrl()}/projects/${projectId}/clips`));
+  },
+
+  // Project-wide auto-cut report. Returns [] until the cut stage finishes
+  // (cached speech-intervals + transcript artifacts must exist on disk).
+  listProjectCuts: async (projectId: string): Promise<ProjectCut[]> => {
+    return jsonOrThrow(await fetch(`${baseUrl()}/projects/${projectId}/cuts`));
   },
 
   createProject: (

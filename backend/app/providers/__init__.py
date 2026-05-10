@@ -1,8 +1,15 @@
-from .base import Cut, LlmProvider
+from .base import Cut, LlmProvider, PolishCut
 from .claude import ClaudeProvider
 from .deepseek import DeepSeekProvider
 
-__all__ = ["Cut", "LlmProvider", "ClaudeProvider", "DeepSeekProvider", "get_provider"]
+__all__ = [
+    "ClaudeProvider",
+    "Cut",
+    "DeepSeekProvider",
+    "LlmProvider",
+    "PolishCut",
+    "get_provider",
+]
 
 
 def get_provider() -> LlmProvider:

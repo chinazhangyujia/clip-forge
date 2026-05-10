@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from .base import ClipInterval, ClipRow, DataStore, JobRow, ProjectRow
+from .base import ClipInterval, ClipRemovedCut, ClipRow, DataStore, JobRow, ProjectRow
 from .local import LocalFileDataStore
 from .postgres import PostgresDataStore
 
@@ -50,6 +50,7 @@ def reset_datastore_for_tests() -> None:
 
 __all__ = [
     "ClipInterval",
+    "ClipRemovedCut",
     "ClipRow",
     "DataStore",
     "JobRow",

@@ -1,4 +1,4 @@
-/* global React, Icon, Spinner, StatusPill, useStore, useRouter, Link, fmtTime, fmtRelative */
+/* global React, Icon, Spinner, StatusPill, useStore, useRouter, Link, fmtTime, fmtRelative, generateProjectCuts, AutoCutsReport */
 const { useState, useEffect, useRef } = React;
 
 const ProjectDetail = ({ projectId }) => {
@@ -32,6 +32,13 @@ const ProjectDetail = ({ projectId }) => {
   }
 
   const clips = clipsByProject[project.id] || [];
+
+  // Project-wide auto-cuts. Deterministic by project seed so the report is
+  // stable across renders. Empty until the cut stage finishes.
+  const cuts = React.useMemo(
+    () => generateProjectCuts(project, clips),
+    [project?.id, project?.pipeline?.cut, clips.length]
+  );
 
   const saveName = () => {
     setEditingName(false);
@@ -147,6 +154,8 @@ const ProjectDetail = ({ projectId }) => {
               </div>
             )}
           </div>
+
+          <AutoCutsReport project={project} cuts={cuts}/>
 
           {clips.length === 0 ? (
             <ClipsLoading project={project}/>

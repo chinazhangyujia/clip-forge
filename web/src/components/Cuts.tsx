@@ -57,7 +57,7 @@ export const REASON_META: Record<CutReason, ReasonStyle> = {
 
 // Glyph metaphor leans toward "kind of content removed" rather than
 // scissors — scissors would imply the user did the cut.
-const ReasonGlyph = ({ reason, size = 14 }: { reason: CutReason; size?: number }) => {
+export const ReasonGlyph = ({ reason, size = 14 }: { reason: CutReason; size?: number }) => {
   const body = (() => {
     switch (reason) {
       case "pause":

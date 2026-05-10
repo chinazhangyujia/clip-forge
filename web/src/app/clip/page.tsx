@@ -21,7 +21,17 @@ function ClipPageInner() {
       </div>
     );
   }
-  return <ClipDetail projectId={projectId} clipId={clipId} />;
+  // Optional deep-link hint from the project Auto-cuts report — `at` is
+  // a source-time second; `cut` is the row id we landed from. ClipDetail
+  // seeks the player and shows a one-shot landing pill. Both keys are
+  // ignored when missing.
+  const at = params.get("at");
+  const cutId = params.get("cut");
+  const hint =
+    at != null && cutId != null
+      ? { at: parseFloat(at), cut: cutId }
+      : undefined;
+  return <ClipDetail projectId={projectId} clipId={clipId} hint={hint} />;
 }
 
 export default function ClipPage() {

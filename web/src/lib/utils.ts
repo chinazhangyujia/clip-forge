@@ -85,18 +85,92 @@ export const isPastLastInterval = (
   return sourceSec >= intervals[intervals.length - 1].endSec - 0.01;
 };
 
-// Derive auto-cut markers from a clip's source-time speech intervals.
-// Each gap between consecutive intervals is a removed long-pause: its
-// compact-time position is the cumulative interval duration up to that
-// gap, and its size is the source-time gap itself. afterIdx is the
-// index in the *visible-transcript-segment list* (segments overlapping
-// the clip's outer source-time window) the divider sits below.
+// Derive auto-cut markers for the transcript view + scrubber rail.
 //
-// Today this is the only producer of cuts; when filler-word / repeat /
-// low-value classifiers ship they'll merge into the same array with
-// different `reason` values. The visual system already handles all four.
-import type { Cut, TranscriptSegment } from "./types";
-export const computeLongPauseCuts = (
+// Preferred path: the backend ships `removedCuts` per clip (each tagged
+// with a reason). We map each entry to a `Cut`, computing its compact-
+// time position by mapping the cut's source-time start through the
+// clip's intervals, and placing the transcript divider after the
+// segment that ends closest to (and not after) the cut.
+//
+// Fallback for legacy clips that predate `removedCuts`: derive pause
+// cuts from interval gaps. Behavior matches the original
+// `computeLongPauseCuts`.
+import type { Cut, CutReason, TranscriptSegment } from "./types";
+
+const KNOWN_REASONS: ReadonlySet<CutReason> = new Set([
+  "pause",
+  "filler",
+  "repeat",
+  "lowvalue",
+]);
+
+const normalizeReason = (raw: string): CutReason => {
+  // Backend sends a string so future reasons don't break the wire
+  // format. Snap unknowns to "lowvalue" — the visual system has a
+  // muted neutral style for it that reads as "something was cut".
+  if ((KNOWN_REASONS as Set<string>).has(raw)) return raw as CutReason;
+  return "lowvalue";
+};
+
+const placeAfterIdx = (
+  cutSrcStart: number,
+  visibleSegments: TranscriptSegment[],
+): number => {
+  // Filler cuts land *inside* a segment (filler words are mid-clause),
+  // pause cuts land *between* two segments. Try the contains-segment
+  // case first — if a segment straddles the cut start, the divider
+  // belongs after that segment so the user reads "the line that
+  // contained the filler → cut marker → next line". Fall back to "last
+  // segment ending before the cut" for the between-segments case. The
+  // tolerance covers the small pre/post padding the speech mask bakes
+  // around interval bounds plus filler-word edge padding.
+  for (let s = 0; s < visibleSegments.length; s++) {
+    const seg = visibleSegments[s];
+    if (seg.start <= cutSrcStart + 0.05 && cutSrcStart < seg.end - 0.05) {
+      return s;
+    }
+  }
+  let afterIdx = -1;
+  for (let s = 0; s < visibleSegments.length; s++) {
+    if (visibleSegments[s].end <= cutSrcStart + 0.3) afterIdx = s;
+    else break;
+  }
+  return afterIdx;
+};
+
+export const cutsFromClip = (
+  clip: Clip,
+  visibleSegments: TranscriptSegment[],
+): Cut[] => {
+  const removed = clip.removedCuts;
+  if (removed && removed.length > 0) {
+    return removed
+      .map((rc, i): Cut | null => {
+        const removedSec = rc.srcEnd - rc.srcStart;
+        if (removedSec <= 0.05) return null;
+        const afterIdx = placeAfterIdx(rc.srcStart, visibleSegments);
+        if (afterIdx < 0) return null;
+        // Compact position = how much speech precedes this cut. Map
+        // the cut's source-time start through the surviving intervals.
+        const t = sourceToCompact(rc.srcStart, clip.intervals);
+        return {
+          id: `cut-${i}`,
+          t,
+          afterIdx,
+          reason: normalizeReason(rc.reason),
+          removedSec,
+        };
+      })
+      .filter((c): c is Cut => c !== null);
+  }
+  return computeLongPauseCutsFromGaps(clip.intervals, visibleSegments);
+};
+
+// Legacy fallback: derive pause cuts from interval gaps. Used for clips
+// produced before the backend started carrying `removedCuts` with
+// reasons.
+const computeLongPauseCutsFromGaps = (
   intervals: ClipInterval[],
   visibleSegments: TranscriptSegment[],
 ): Cut[] => {
@@ -109,14 +183,7 @@ export const computeLongPauseCuts = (
     compactT += iv.endSec - iv.startSec;
     const removedSec = next.startSec - iv.endSec;
     if (removedSec <= 0.05) continue;
-    // Place the divider after the last visible segment whose end falls
-    // inside this interval (with a small tolerance for the 0.2s
-    // pre/post padding the speech mask bakes into bounds).
-    let afterIdx = -1;
-    for (let s = 0; s < visibleSegments.length; s++) {
-      if (visibleSegments[s].end <= iv.endSec + 0.3) afterIdx = s;
-      else break;
-    }
+    const afterIdx = placeAfterIdx(iv.endSec, visibleSegments);
     if (afterIdx < 0) continue;
     out.push({
       id: `cut-${i}`,

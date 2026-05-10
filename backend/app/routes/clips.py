@@ -49,9 +49,11 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
     # silence, the silence stays removed; if they shrunk past one of the
     # clip's interior intervals, that interval drops out.
     intervals: list[dict] = []
+    removed_cuts: list[dict] = []
     speech_p = pp.speech_intervals_path(project)
     if speech_p.exists():
-        mask = silence.deserialize_intervals(json.loads(speech_p.read_text()))
+        speech_data = json.loads(speech_p.read_text())
+        mask = silence.deserialize_intervals(speech_data)
         sliced = silence.source_range_to_source_intervals(
             body.start_sec, body.end_sec, mask
         )
@@ -61,6 +63,16 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
                 "Selected range contains no speech — pick a wider window.",
             )
         intervals = [{"start_sec": s, "end_sec": e} for s, e in sliced]
+        # Slice the project-level cut list (with reasons) to the new
+        # outer bounds so the clip-detail UI keeps showing the right
+        # set of pause/filler markers.
+        all_cuts = silence.deserialize_cuts(speech_data)
+        outer_start = sliced[0][0]
+        outer_end = sliced[-1][1]
+        removed_cuts = [
+            {"src_start": c.src_start, "src_end": c.src_end, "reason": c.reason}
+            for c in silence.cuts_in_source_range(all_cuts, outer_start, outer_end)
+        ]
     else:
         # Pre-feature project: no mask available, fall back to a single
         # interval covering the user's range. The clip will play with any
@@ -81,6 +93,7 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
             "start_sec": body.start_sec,
             "end_sec": body.end_sec,
             "intervals": intervals,
+            "removed_cuts": removed_cuts,
             "needs_render": True,
             "stale_variants": stale,
             "updated_at": _now_ms(),

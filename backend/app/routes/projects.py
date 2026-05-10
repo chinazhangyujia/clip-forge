@@ -8,11 +8,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from .. import _project_paths as pp
-from .. import jobs, pipeline
+from .. import cut_report, jobs, pipeline
 from ..datastore import ProjectRow, get_datastore
 from ..schemas import (
     Clip,
     Project,
+    ProjectCut,
     ProjectUpdate,
     clip_row_to_dto,
     project_row_to_dto,
@@ -248,6 +249,25 @@ async def list_clips(project_id: str) -> list[Clip]:
     ds = get_datastore()
     rows = await ds.list_clips(project_id)
     return [clip_row_to_dto(r) for r in rows]
+
+
+@router.get(
+    "/{project_id}/cuts",
+    response_model=list[ProjectCut],
+    response_model_by_alias=True,
+)
+async def list_project_cuts(project_id: str) -> list[ProjectCut]:
+    """Project-wide auto-cut report. Reads the cached speech mask + the
+    transcript on disk; returns an empty list when neither exists yet
+    (e.g. project status still 'Processing'). Each row carries enough
+    context to render in the UI without a follow-up call."""
+    ds = get_datastore()
+    project = await ds.get_project(project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    clips = await ds.list_clips(project_id)
+    rows = cut_report.build_report(project, clips)
+    return [ProjectCut(**row) for row in rows]
 
 
 @router.get("/{project_id}/source")

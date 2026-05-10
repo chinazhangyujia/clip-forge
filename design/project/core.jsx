@@ -413,7 +413,96 @@ const Link = ({ to, children, ...rest }) => {
   );
 };
 
+/* ---------- Auto-cut generation (project-wide, source-time) ----------
+ * One source video → many cuts spread across its full duration. Some land in
+ * regions that became clips (clipId set), some don't (clipId null — surfaced
+ * but not navigable on the report).
+ *
+ * Pause cuts carry "before/after" excerpts framing the silence.
+ * Filler cuts carry one surrounding excerpt with the offending token marked.
+ */
+const PAUSE_CONTEXTS = [
+  ["…and that's the part most people skim past.", "Now if you look at how the framework actually fits together…"],
+  ["…I think the real question is, why now?", "Honestly, the answer surprised me when I worked it out…"],
+  ["…you can see it works on a small set.", "But what about the long tail — does the same logic hold?"],
+  ["…the first three seconds are a contract with the viewer.", "Break the contract and they're gone, no second chance…"],
+  ["…that's basically the whole insight in one sentence.", "Let me show you what that looks like in practice…"],
+  ["…we ran this experiment three times to be sure.", "Each time the same pattern showed up, which is what convinced me…"],
+  ["…most creators copy the format and miss the principle.", "The principle is the part that actually transfers between platforms…"],
+  ["…there's a version of this that doesn't work, by the way.", "I want to walk you through that one too, so you can avoid it…"],
+  ["…I used to think length was the lever, but it isn't.", "The lever is whether the first frame earns the second one…"],
+  ["…honestly, this is the slide I almost cut from the deck.", "But it ended up being the one people quoted back to me the most…"],
+  ["…here's where it gets a little counterintuitive.", "Stay with me, because the payoff lands in a minute…"],
+  ["…we'll come back to that point at the end.", "For now, just hold it loosely while we look at the next piece…"],
+  ["…the data on this is honestly all over the place.", "But the direction is consistent enough that I'd bet on it…"],
+  ["…I don't want to pretend I figured this out fast.", "It took maybe a year of bad takes before the pattern got obvious…"],
+  ["…and that's a really common failure mode.", "If you've ever felt this, you're not doing anything wrong, the format is…"],
+];
+
+const FILLER_CONTEXTS = [
+  { pre: "I think we should",                     word: "um",   post: "start with the basics, because everything builds on that." },
+  { pre: "And so when you look at the data, you",  word: "uh",   post: "see this really clear pattern in the first thirty seconds." },
+  { pre: "The thing that surprised me was,",       word: "like", post: "how consistent the response was across totally different audiences." },
+  { pre: "If we run it again next quarter,",       word: "um",   post: "I'd want to lock down the script before we touch the framing." },
+  { pre: "What I keep coming back to is",          word: "uh",   post: "the question of who you're actually making this for in the first place." },
+  { pre: "You can almost always tell within,",     word: "um",   post: "two or three seconds whether someone's going to keep watching or bounce." },
+  { pre: "I had a clip last year that was,",       word: "you know", post: "objectively pretty rough, and it still outperformed everything else that month." },
+  { pre: "Most of the time the fix isn't,",        word: "uh",   post: "more production polish — it's a rewrite of the opening line." },
+  { pre: "When you read it back out loud,",        word: "um",   post: "you can hear which sentences are real and which ones are filler." },
+  { pre: "The reason that matters is",             word: "like", post: "every word before the hook is borrowed time you have to pay back." },
+  { pre: "I want to be honest with you,",          word: "um",   post: "I don't have a clean answer for that one yet — still figuring it out." },
+  { pre: "And then the next question becomes,",    word: "uh",   post: "okay, but what does that look like on a Tuesday at nine in the morning?" },
+];
+
+/* Cheap deterministic PRNG — same project always produces the same cut report. */
+const seededRand = (seed) => {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+};
+
+const generateProjectCuts = (project, clips = []) => {
+  if (!project?.file?.durationSec) return [];
+  const dur = project.file.durationSec;
+  const seedNum = project.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const rand = seededRand(seedNum);
+
+  // ~one cut every 60-90s of source for a natural cadence; clamp to 18-90.
+  const target = Math.max(18, Math.min(90, Math.round(dur / 75)));
+  const cuts = [];
+  let cursor = 30 + rand() * 90;
+  for (let i = 0; i < target && cursor < dur - 20; i++) {
+    const reason = rand() < 0.66 ? 'pause' : 'filler';
+    let removedSec, pre, post, word = null;
+    if (reason === 'pause') {
+      removedSec = Math.round((1.6 + rand() * 3.6) * 10) / 10;
+      const ctx = PAUSE_CONTEXTS[Math.floor(rand() * PAUSE_CONTEXTS.length)];
+      pre = ctx[0]; post = ctx[1];
+    } else {
+      removedSec = Math.round((0.2 + rand() * 0.4) * 10) / 10;
+      const ctx = FILLER_CONTEXTS[Math.floor(rand() * FILLER_CONTEXTS.length)];
+      pre = ctx.pre; post = ctx.post; word = ctx.word;
+    }
+    // Find which clip (if any) contains this source moment
+    const containing = clips.find(c => cursor >= c.startSec && cursor <= c.endSec);
+    cuts.push({
+      id: `${project.id}-cut${i + 1}`,
+      sourceSec: Math.round(cursor * 10) / 10,
+      reason,
+      removedSec,
+      pre, post, word,
+      clipId: containing?.id || null,
+    });
+    // Advance cursor — denser around clip regions, sparser elsewhere
+    const gap = 25 + rand() * 110;
+    cursor += gap;
+  }
+  return cuts;
+};
+
 Object.assign(window, {
   Icon, Spinner, StatusPill, StoreProvider, useStore, RouterProvider, useRouter, Link,
-  fmtTime, fmtRelative, PROMPT_PRESETS, generateClips, SAMPLE_TRANSCRIPT,
+  fmtTime, fmtRelative, PROMPT_PRESETS, generateClips, generateProjectCuts, SAMPLE_TRANSCRIPT,
 });

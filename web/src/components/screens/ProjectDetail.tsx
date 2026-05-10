@@ -8,10 +8,11 @@ import { api } from "@/lib/api";
 import { fmtDuration, fmtRelative, fmtTime } from "@/lib/utils";
 import { Icon, Spinner } from "@/lib/icons";
 import { StatusPill } from "@/components/StatusPill";
+import { CutReport } from "@/components/CutReport";
 import type { Clip, Pipeline, Project, ProjectFile, StageState } from "@/lib/types";
 
 export const ProjectDetail = ({ projectId }: { projectId: string }) => {
-  const { projects, clipsByProject, refreshProject, loadClips, updateProject, rerunProject, pushToast, settings } =
+  const { projects, clipsByProject, cutsByProject, refreshProject, loadClips, loadProjectCuts, updateProject, rerunProject, pushToast, settings } =
     useStore();
   const router = useRouter();
   const project = projects.find((p) => p.id === projectId);
@@ -43,6 +44,15 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
       loadClips(projectId);
     }
   }, [projectStatus, projectId, loadClips]);
+
+  // Load the project-wide auto-cut report once the cut stage finishes.
+  // Also re-loads after a Re-run so updated wordlists/thresholds land.
+  const cutStage = project?.pipeline?.cut;
+  useEffect(() => {
+    if (cutStage === "done") {
+      loadProjectCuts(projectId);
+    }
+  }, [cutStage, projectId, loadProjectCuts]);
 
   const startEditingName = () => {
     if (!project) return;
@@ -253,6 +263,8 @@ export const ProjectDetail = ({ projectId }: { projectId: string }) => {
         </aside>
 
         <main>
+          <CutReport project={project} cuts={cutsByProject[project.id] ?? []} />
+
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em" }}>Clips</h2>

@@ -43,6 +43,17 @@ class ClipInterval(BaseModel):
     end_sec: float
 
 
+class ClipRemovedCut(BaseModel):
+    """One source-time range the auto-cutter removed inside this clip's
+    outer bounds, tagged with why. Reasons today: 'pause' (long inter-
+    segment silence) or 'filler' (per-language wordlist match). Future
+    reasons land here without a schema bump."""
+
+    src_start: float
+    src_end: float
+    reason: str
+
+
 class ClipRow(BaseModel):
     id: str
     project_id: str
@@ -58,6 +69,10 @@ class ClipRow(BaseModel):
     # produced before this schema landed; treat as a single
     # [(start_sec, end_sec)] interval (see clip_row_to_dto).
     intervals: list[ClipInterval] = Field(default_factory=list)
+    # Source-time ranges removed inside the clip, with reasons. Pre-filler
+    # clips have an empty list; the API DTO falls back to deriving pause
+    # cuts from interval gaps for those.
+    removed_cuts: list[ClipRemovedCut] = Field(default_factory=list)
     variants: list[str] = Field(default_factory=lambda: ["original"])
     stale_variants: list[str] = Field(default_factory=list)
     needs_render: bool = True

@@ -32,15 +32,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import pairwise
+from typing import Literal
 
 # Defaults. Hardcoded for now; promote to per-project settings later if
 # someone needs different aggression. These are deliberately conservative
 # — natural sentence-end pauses run 0.5–1.2s, so anything shorter than
 # MAX_PAUSE_SEC is preserved as-is.
 MAX_PAUSE_SEC = 1.5  # pauses longer than this between segments are removed
-KEEP_PAUSE_SEC = 0.5  # natural breath kept at every removed-pause boundary
+# Total breath kept across each removed-pause boundary (split half/half:
+# 0.4s before the cut + 0.4s after). Bumped from 0.5 → 0.8 after users
+# reported the trailing word getting chopped on cuts: Whisper's word-end
+# timestamp can underestimate the actual phonation tail by 100–200ms
+# (especially on tone-3 Chinese syllables and other words with sustained
+# voiced decay), and our 40ms audio crossfade then fades out the
+# remaining tail. Wider headroom absorbs the underestimate without
+# making cuts feel slow — for a typical 2s pause we still remove ~1.2s.
+KEEP_PAUSE_SEC = 0.8
 PADDING_SEC = 0.05  # tiny pre/post-roll so consonants survive segment trim
+# Polish cuts (filler / repeat) sit inside spoken phrases — trailing
+# breath and pre-attack from neighboring words need more headroom than
+# the segment-edge case to keep the splice from sounding chopped. Bumped
+# from 0.05 → 0.10 after subjective testing surfaced "halting" cuts.
+POLISH_EDGE_SEC = 0.10
 MIN_INTERVAL_SEC = 0.1  # drop intervals shorter than this (Whisper junk)
+
+
+# String enum kept open-ended for forward-compat: more reasons (repeat
+# phrase, low-value content) will land later under the same shape.
+CutReason = Literal["pause", "filler"]
 
 
 @dataclass
@@ -55,6 +74,21 @@ class SpeechInterval:
     @property
     def src_duration(self) -> float:
         return self.src_end - self.src_start
+
+
+@dataclass
+class RemovedCut:
+    """A source-time range removed from playback, tagged with the reason
+    the cutter took it out. Pause cuts come from inter-segment silence;
+    filler cuts come from the per-language wordlist + word timestamps."""
+
+    src_start: float
+    src_end: float
+    reason: CutReason  # "pause" | "filler"
+
+    @property
+    def removed_sec(self) -> float:
+        return max(0.0, self.src_end - self.src_start)
 
 
 def compute_speech_intervals(
@@ -134,6 +168,106 @@ def compute_speech_intervals(
         )
         compact_t += dur
     return intervals
+
+
+def derive_pause_cuts(intervals: list[SpeechInterval]) -> list[RemovedCut]:
+    """Every gap between consecutive intervals is a removed long pause —
+    materialize it as an explicit cut so the API can carry the reason."""
+    cuts: list[RemovedCut] = []
+    for prev, nxt in pairwise(intervals):
+        if nxt.src_start - prev.src_end > 0.01:
+            cuts.append(
+                RemovedCut(
+                    src_start=prev.src_end,
+                    src_end=nxt.src_start,
+                    reason="pause",
+                )
+            )
+    return cuts
+
+
+def apply_filler_cuts(
+    intervals: list[SpeechInterval],
+    filler_ranges: list[tuple[float, float, str]],
+) -> tuple[list[SpeechInterval], list[RemovedCut]]:
+    """Splice filler / repeat ranges into the speech mask.
+
+    Each input range is `(src_start, src_end, reason)` — the reason is
+    preserved on the resulting cut so the API can carry "filler" vs
+    "repeat" downstream. A range that lands inside an existing speech
+    interval splits that interval in two (with `PADDING_SEC` of
+    breathing room on each side so consonants survive). Ranges outside
+    any speech interval are dropped — they're already in a removed pause.
+
+    Returns the rewritten interval list (compact times re-derived from
+    scratch so the compact timeline stays contiguous) and the combined
+    cut list (pauses + polish cuts, ordered by source time). Tracking
+    polish cuts as we splice — rather than re-deriving from the final
+    gap geometry — keeps the per-range reason exact even when a polish
+    cut lands adjacent to a long pause.
+    """
+    pause_cuts = derive_pause_cuts(intervals)
+    if not filler_ranges:
+        return intervals, pause_cuts
+
+    runs: list[tuple[float, float]] = [(iv.src_start, iv.src_end) for iv in intervals]
+    polish_cuts: list[RemovedCut] = []
+    # Wider headroom around polish cuts than around segment edges — these
+    # land mid-phrase, so trailing breath / pre-attack on the surrounding
+    # words needs to survive or the splice sounds chopped.
+    edge = POLISH_EDGE_SEC
+    for f_start, f_end, reason in sorted(filler_ranges, key=lambda r: r[0]):
+        # Find the run containing this range. Scan forward — runs are
+        # source-ordered and never overlap, so the first hit is unique.
+        for i, (rs, re) in enumerate(runs):
+            if rs <= f_start and f_end <= re:
+                cs = max(rs, f_start)
+                ce = min(re, f_end)
+                if ce - cs < 0.05:
+                    break
+                polish_cuts.append(
+                    RemovedCut(src_start=cs, src_end=ce, reason=reason)
+                )
+                left_e = max(rs, cs - edge)
+                right_s = min(re, ce + edge)
+                replacement: list[tuple[float, float]] = []
+                if left_e - rs >= MIN_INTERVAL_SEC:
+                    replacement.append((rs, left_e))
+                if re - right_s >= MIN_INTERVAL_SEC:
+                    replacement.append((right_s, re))
+                runs = runs[:i] + replacement + runs[i + 1 :]
+                break
+
+    rebuilt: list[SpeechInterval] = []
+    compact_t = 0.0
+    for s, e in sorted(runs, key=lambda r: r[0]):
+        if e - s < MIN_INTERVAL_SEC:
+            continue
+        dur = e - s
+        rebuilt.append(
+            SpeechInterval(
+                src_start=s,
+                src_end=e,
+                compact_start=compact_t,
+                compact_end=compact_t + dur,
+            )
+        )
+        compact_t += dur
+
+    all_cuts = sorted(pause_cuts + polish_cuts, key=lambda c: c.src_start)
+    return rebuilt, all_cuts
+
+
+def cuts_in_source_range(
+    cuts: list[RemovedCut], src_start: float, src_end: float
+) -> list[RemovedCut]:
+    """Subset the project-level cut list to those that fall inside a
+    clip's outer source-time bounds."""
+    return [
+        c
+        for c in cuts
+        if c.src_start >= src_start - 0.01 and c.src_end <= src_end + 0.01
+    ]
 
 
 def compact_total(intervals: list[SpeechInterval]) -> float:
@@ -219,9 +353,19 @@ def source_range_to_source_intervals(
     return out
 
 
-def serialize_intervals(intervals: list[SpeechInterval]) -> dict:
+def serialize_intervals(
+    intervals: list[SpeechInterval],
+    cuts: list[RemovedCut] | None = None,
+) -> dict:
+    """Serialize the project's speech mask. v2 adds the explicit `cuts`
+    list (each tagged with a reason) so the API can carry per-cut metadata
+    instead of inferring reasons from gap geometry. v1 mask files predate
+    filler support and have pause cuts only — `deserialize_cuts` fills the
+    list in by deriving from gaps."""
+    if cuts is None:
+        cuts = derive_pause_cuts(intervals)
     return {
-        "version": 1,
+        "version": 2,
         "max_pause_sec": MAX_PAUSE_SEC,
         "keep_pause_sec": KEEP_PAUSE_SEC,
         "padding_sec": PADDING_SEC,
@@ -235,6 +379,14 @@ def serialize_intervals(intervals: list[SpeechInterval]) -> dict:
             }
             for iv in intervals
         ],
+        "cuts": [
+            {
+                "src_start": c.src_start,
+                "src_end": c.src_end,
+                "reason": c.reason,
+            }
+            for c in cuts
+        ],
     }
 
 
@@ -247,4 +399,21 @@ def deserialize_intervals(data: dict) -> list[SpeechInterval]:
             compact_end=iv["compact_end"],
         )
         for iv in data.get("intervals", [])
+    ]
+
+
+def deserialize_cuts(data: dict) -> list[RemovedCut]:
+    """Read the cut list out of a serialized mask. Falls back to deriving
+    pause cuts from interval gaps when reading a v1 file (which predates
+    the explicit list)."""
+    raw_cuts = data.get("cuts")
+    if raw_cuts is None:
+        return derive_pause_cuts(deserialize_intervals(data))
+    return [
+        RemovedCut(
+            src_start=c["src_start"],
+            src_end=c["src_end"],
+            reason=c.get("reason", "pause"),
+        )
+        for c in raw_cuts
     ]

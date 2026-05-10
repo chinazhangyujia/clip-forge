@@ -6,7 +6,7 @@ import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import {
   compactToSource,
-  computeLongPauseCuts,
+  cutsFromClip,
   fmtDuration,
   fmtTime,
   isPastLastInterval,
@@ -32,7 +32,17 @@ type VariantOpt = { key: ClipVariant; label: string; has: boolean; stale: boolea
 
 type PreviewBand = { start: number; end: number } | null;
 
-export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: string }) => {
+export type ClipDetailHint = { at: number; cut: string };
+
+export const ClipDetail = ({
+  projectId,
+  clipId,
+  hint,
+}: {
+  projectId: string;
+  clipId: string;
+  hint?: ClipDetailHint;
+}) => {
   const { projects, clipsByProject, loadClips, updateClipBounds, updateClipLocally, pushToast } =
     useStore();
   const project = projects.find((p) => p.id === projectId);
@@ -58,8 +68,22 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
   // lib/types.ts for the rationale.
   const [generating, setGenerating] = useState<GenKind>(null);
   const [previewBand, setPreviewBand] = useState<PreviewBand>(null);
+  // One-shot landing pill — appears briefly after navigating from the
+  // project Auto-cuts report so the user sees where they landed. Cleared
+  // by a timer; the seek itself is handled in Player via `seekHint`.
+  const [landedFlash, setLandedFlash] = useState(false);
+  const appliedHintRef = useRef<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (!hint || !clip) return;
+    if (appliedHintRef.current === hint.cut) return;
+    appliedHintRef.current = hint.cut;
+    setLandedFlash(true);
+    const t = setTimeout(() => setLandedFlash(false), 2400);
+    return () => clearTimeout(t);
+  }, [hint, clip]);
 
   // Load clips for this project on mount (in case we deep-linked here).
   useEffect(() => {
@@ -212,13 +236,13 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
   }));
 
   // Auto-removed cuts surfaced on the transcript and the player scrubber.
-  // Today these are derived from the speech mask (long-pause removals);
-  // when filler/repeat/low-value classifiers ship they'll merge into the
-  // same array with different `reason` values.
+  // Backend tags each removed range with a reason (long pause / filler);
+  // we map them through the clip's compact timeline and place each one
+  // after the transcript segment it belongs to.
   const visibleSegments = transcript.filter(
     (seg) => seg.end > clip.startSec && seg.start < clip.endSec,
   );
-  const cuts: Cut[] = computeLongPauseCuts(clip.intervals, visibleSegments);
+  const cuts: Cut[] = cutsFromClip(clip, visibleSegments);
 
   // Active cut: the one nearest the playhead within a small window — gives
   // the divider the same brief subtle highlight beat the active transcript
@@ -338,7 +362,12 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
             currentSec={currentSec}
             setCurrentSec={setCurrentSec}
             cuts={cuts}
+            seekHint={hint?.at}
+            seekHintKey={hint?.cut}
           />
+          {landedFlash && hint != null && (
+            <LandingPill projectId={projectId} at={hint.at} />
+          )}
           <ActionBar
             hasReframe={hasReframe}
             generating={generating}
@@ -364,6 +393,51 @@ export const ClipDetail = ({ projectId, clipId }: { projectId: string; clipId: s
     </div>
   );
 };
+
+// One-shot landing pill rendered above the player after navigating from
+// the project Auto-cuts report. Auto-fades after a couple seconds; the
+// inline link sends the user back to the report.
+const LandingPill = ({ projectId, at }: { projectId: string; at: number }) => (
+  <div
+    style={{
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "7px 12px",
+      marginBottom: 14,
+      borderRadius: 999,
+      background: "var(--accent-soft)",
+      border: "1px solid oklch(0.88 0.07 50)",
+      color: "oklch(0.45 0.16 45)",
+      fontSize: 12.5,
+      fontWeight: 500,
+      animation: "fadeIn .2s",
+      boxShadow: "var(--shadow-sm)",
+    }}
+  >
+    <span style={{ display: "inline-flex" }}>
+      <Icon name="sparkle" size={12} />
+    </span>
+    Landed at{" "}
+    <span className="mono" style={{ fontWeight: 600 }}>
+      {fmtTime(at)}
+    </span>{" "}
+    from the auto-cut report
+    <Link
+      href={`/project?id=${projectId}`}
+      style={{
+        marginLeft: 8,
+        color: "oklch(0.45 0.16 45)",
+        borderLeft: "1px solid oklch(0.88 0.07 50)",
+        paddingLeft: 10,
+        fontSize: 11.5,
+        fontWeight: 500,
+      }}
+    >
+      Back to report
+    </Link>
+  </div>
+);
 
 const VariantTabs = ({
   variants,
@@ -478,6 +552,8 @@ const Player = ({
   currentSec,
   setCurrentSec,
   cuts,
+  seekHint,
+  seekHintKey,
 }: {
   clip: Clip;
   projectId: string;
@@ -488,6 +564,11 @@ const Player = ({
   currentSec: number;
   setCurrentSec: (s: number) => void;
   cuts: Cut[];
+  // Optional source-time second to seek to on mount/clip-load. Used by
+  // the project Auto-cuts report deep-link (?at=&cut=). `seekHintKey`
+  // identifies the hint so the seek doesn't re-fire on prop refreshes.
+  seekHint?: number;
+  seekHintKey?: string;
 }) => {
   // The 9:16 variant plays a pre-rendered MP4 that's already silence-
   // removed, so we drop the source-time skip-silence machinery and treat
@@ -517,6 +598,24 @@ const Player = ({
     if (v && v.readyState >= 1) v.currentTime = firstStart;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.id, firstStart, usingReframe]);
+
+  // Apply the deep-link seek hint from the Auto-cuts report. Runs after
+  // the metadata-driven first-start seek so it wins. Reframe is skipped
+  // — `seekHint` is source-time and the variant plays a pre-rendered
+  // file. `seekHintKey` keys the effect so it fires once per landing.
+  useEffect(() => {
+    if (seekHint == null || usingReframe) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const apply = () => {
+      v.currentTime = seekHint;
+      setCurrentSec(seekHint);
+    };
+    if (v.readyState >= 1) apply();
+    else v.addEventListener("loadedmetadata", apply, { once: true });
+    return () => v.removeEventListener("loadedmetadata", apply);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.id, seekHintKey, usingReframe]);
 
   // Clip-relative time for the controls + cold-open hook gating. With
   // silence removal, this is COMPACT time — `clip.duration` already comes

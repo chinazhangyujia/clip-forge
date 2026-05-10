@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
 from .datastore import ClipInterval as ClipIntervalRow
+from .datastore import ClipRemovedCut as ClipRemovedCutRow
 from .datastore import ClipRow, ProjectRow
 
 
@@ -57,6 +58,15 @@ class ClipInterval(APIModel):
     end_sec: float
 
 
+class ClipRemovedCut(APIModel):
+    """One automatic removal inside a clip, with the reason. Reasons are
+    open-ended strings — currently 'pause' and 'filler', more to come."""
+
+    src_start: float
+    src_end: float
+    reason: str
+
+
 class Clip(APIModel):
     id: str
     project_id: str
@@ -71,6 +81,11 @@ class Clip(APIModel):
     # element. The player concats these for playback; the renderer concats
     # them for the downloaded MP4.
     intervals: list[ClipInterval]
+    # Source-time ranges removed inside the clip, tagged with the reason
+    # (long pause / filler word / …). Empty list for legacy clips
+    # produced before reason-tagging shipped — frontend falls back to
+    # deriving pause cuts from interval gaps in that case.
+    removed_cuts: list[ClipRemovedCut]
     variants: list[str]
     description: str
     hashtags: list[str]
@@ -79,6 +94,23 @@ class Clip(APIModel):
     original: ClipOriginal
     stale_variants: list[str]
     needs_render: bool
+
+
+class ProjectCut(APIModel):
+    """One row in the project-level Auto-cuts report. Carries enough
+    context (excerpts / token) to render the row without a follow-up
+    request, plus the clip id (if any) so the row can deep-link to the
+    cut moment in Clip Detail."""
+
+    id: str
+    source_sec: float
+    source_end_sec: float
+    removed_sec: float
+    reason: str
+    clip_id: str | None = None
+    pre: str = ""
+    post: str = ""
+    word: str | None = None
 
 
 class ClipUpdate(APIModel):
@@ -150,9 +182,31 @@ def _row_intervals(row: ClipRow) -> list[ClipIntervalRow]:
     return [ClipIntervalRow(start_sec=row.start_sec, end_sec=row.end_sec)]
 
 
+def _row_removed_cuts(
+    row: ClipRow, intervals: list[ClipIntervalRow]
+) -> list[ClipRemovedCutRow]:
+    """Backfill for clips written before reason-tagging: every gap
+    between consecutive intervals is a long pause. Filler cuts didn't
+    exist for those clips, so this is exact for legacy data."""
+    if row.removed_cuts:
+        return row.removed_cuts
+    out: list[ClipRemovedCutRow] = []
+    for prev, nxt in zip(intervals, intervals[1:], strict=False):
+        if nxt.start_sec - prev.end_sec > 0.05:
+            out.append(
+                ClipRemovedCutRow(
+                    src_start=prev.end_sec,
+                    src_end=nxt.start_sec,
+                    reason="pause",
+                )
+            )
+    return out
+
+
 def clip_row_to_dto(row: ClipRow) -> Clip:
     intervals = _row_intervals(row)
     compact_duration = sum(i.end_sec - i.start_sec for i in intervals)
+    removed_cuts = _row_removed_cuts(row, intervals)
     return Clip(
         id=row.id,
         project_id=row.project_id,
@@ -161,6 +215,10 @@ def clip_row_to_dto(row: ClipRow) -> Clip:
         start_sec=row.start_sec,
         end_sec=row.end_sec,
         intervals=[ClipInterval(start_sec=i.start_sec, end_sec=i.end_sec) for i in intervals],
+        removed_cuts=[
+            ClipRemovedCut(src_start=c.src_start, src_end=c.src_end, reason=c.reason)
+            for c in removed_cuts
+        ],
         variants=row.variants,
         description=row.description,
         hashtags=row.hashtags,

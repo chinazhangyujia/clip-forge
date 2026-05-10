@@ -14,7 +14,7 @@ import time
 from time import monotonic
 
 from . import pipeline
-from .datastore import ClipInterval, ClipRow, JobRow, get_datastore
+from .datastore import ClipInterval, ClipRemovedCut, ClipRow, JobRow, get_datastore
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +156,14 @@ async def _run_pipeline(project_id: str) -> None:
                 original_end_sec=c.src_end,
                 intervals=[
                     ClipInterval(start_sec=s, end_sec=e) for s, e in c.intervals
+                ],
+                removed_cuts=[
+                    ClipRemovedCut(
+                        src_start=rc.src_start,
+                        src_end=rc.src_end,
+                        reason=rc.reason,
+                    )
+                    for rc in c.removed_cuts
                 ],
                 variants=["original"],
                 stale_variants=[],

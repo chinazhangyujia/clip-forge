@@ -1,7 +1,7 @@
 /* global React, Icon, Spinner, useStore, useRouter, Link, fmtTime, SAMPLE_TRANSCRIPT, TrimPanel, DownloadControl, useDownloadManager, CutDivider, CutTickRail, CutsSummary, REASON_META */
 const { useState, useEffect, useRef, useMemo } = React;
 
-const ClipDetail = ({ projectId, clipId }) => {
+const ClipDetail = ({ projectId, clipId, hint }) => {
   const { projects, clipsByProject, setClipsByProject, pushToast } = useStore();
   const { navigate } = useRouter();
 
@@ -15,7 +15,25 @@ const ClipDetail = ({ projectId, clipId }) => {
   const [generating, setGenerating] = useState(null); // 'captions' | 'reframe' | null
   const [genProgress, setGenProgress] = useState(0);
   const [previewBand, setPreviewBand] = useState(null); // {start,end} while dragging trim handles
+  const [landedFlash, setLandedFlash] = useState(false); // brief highlight after navigating from auto-cut report
   const downloadManager = useDownloadManager();
+
+  // Auto-cut report deep link: ?at=<source seconds>&cut=<id>
+  // Seeks the scrubber to the cut moment on mount and flashes a one-shot
+  // highlight so the user sees where they landed. Backend wiring (true seek
+  // into the rendered MP4) is engineering's job; this is the visual handshake.
+  useEffect(() => {
+    if (!hint?.at) return;
+    const c = clipsByProject[projectId]?.find(x => x.id === clipId);
+    if (!c) return;
+    const at = parseFloat(hint.at);
+    const frac = Math.max(0, Math.min(1, (at - c.startSec) / c.duration));
+    setScrub(frac);
+    setLandedFlash(true);
+    const t = setTimeout(() => setLandedFlash(false), 2400);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hint?.at, hint?.cut, projectId, clipId]);
 
   const updateClip = (patch) => {
     setClipsByProject(cbp => ({
@@ -169,6 +187,42 @@ const ClipDetail = ({ projectId, clipId }) => {
         <span style={{ opacity: .5 }}>/</span>
         <span style={{ color: 'var(--fg)' }}>Clip</span>
       </div>
+
+      {/* One-shot landing banner — appears after navigating from the project's
+       * auto-cut report. Auto-fades after a couple seconds. */}
+      {landedFlash && hint?.at && (
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '7px 12px',
+          marginBottom: 14,
+          borderRadius: 999,
+          background: 'var(--accent-soft)',
+          border: '1px solid oklch(0.88 0.07 50)',
+          color: 'oklch(0.45 0.16 45)',
+          fontSize: 12.5,
+          fontWeight: 500,
+          animation: 'fadeIn .2s',
+          boxShadow: 'var(--shadow-sm)',
+        }}>
+          <span style={{ display: 'inline-flex' }}><Icon name="sparkle" size={12}/></span>
+          Landed at <span className="mono" style={{ fontWeight: 600 }}>{fmtTime(parseFloat(hint.at))}</span> from the auto-cut report
+          <Link
+            to={`/projects/${project.id}`}
+            style={{
+              marginLeft: 8,
+              color: 'oklch(0.45 0.16 45)',
+              borderLeft: '1px solid oklch(0.88 0.07 50)',
+              paddingLeft: 10,
+              fontSize: 11.5,
+              fontWeight: 500,
+            }}
+          >
+            Back to report
+          </Link>
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 20 }}>
         <div>

@@ -11,16 +11,20 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 const Routes = () => {
   const { path } = useRouter();
 
+  // Strip query string off for routing; pass parsed params through to children.
+  const [pathOnly, queryStr = ''] = path.split('?');
+  const query = Object.fromEntries(new URLSearchParams(queryStr));
+
   // /projects/:id/clips/:clipId
-  const clipMatch = path.match(/^\/projects\/([^/]+)\/clips\/([^/]+)$/);
+  const clipMatch = pathOnly.match(/^\/projects\/([^/]+)\/clips\/([^/]+)$/);
   if (clipMatch) {
     return <>
       <TopNav crumbs={[{ label: 'Projects', to: '/' }, { label: 'Clip' }]}/>
-      <ClipDetail projectId={clipMatch[1]} clipId={clipMatch[2]}/>
+      <ClipDetail projectId={clipMatch[1]} clipId={clipMatch[2]} hint={query}/>
     </>;
   }
 
-  const detailMatch = path.match(/^\/projects\/([^/]+)$/);
+  const detailMatch = pathOnly.match(/^\/projects\/([^/]+)$/);
   if (detailMatch && detailMatch[1] !== 'new') {
     return <>
       <TopNav/>
@@ -28,7 +32,7 @@ const Routes = () => {
     </>;
   }
 
-  if (path === '/projects/new') {
+  if (pathOnly === '/projects/new') {
     return <>
       <TopNav crumbs={[{ label: 'New project' }]}/>
       <NewProject/>

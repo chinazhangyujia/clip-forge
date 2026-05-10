@@ -6,7 +6,16 @@ from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
 
-from .base import Cut, LlmProvider, dedupe_cuts
+from .base import (
+    Cut,
+    LlmProvider,
+    PolishCut,
+    dedupe_cuts,
+    flatten_words,
+    parse_json_array_partial,
+    polish_cuts_from_index_ranges,
+    render_word_list,
+)
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +76,66 @@ CUTTING_SYSTEM_PROMPT = (
     "Return your answer by calling the propose_cuts tool. Times are in seconds "
     "(floats fine).\n"
 )
+
+POLISH_SYSTEM_PROMPT = (
+    "You are polishing a recording's transcript. Given a numbered word list "
+    "(one word per line, prefixed by its index), identify spans the speaker "
+    "said unconsciously — material a human editor would silently remove for "
+    "cleaner playback.\n\n"
+    "Removal-worthy categories:\n"
+    "- Filler sounds: 'um', 'uh', 'er', 'ah', 'hmm', 'mm', '嗯', '呃', '啊', '唉', '呐'.\n"
+    "- Filler phrases (only when used as a hedge / verbal tic, not when "
+    "  semantically meaningful): 'you know', 'I mean', 'like' (as a hedge), "
+    "  'sort of', 'basically', 'literally', 'actually' (as a hedge), '那个', "
+    "  '就是', '然后' (as hesitation), '其实', '我觉得', '你知道'.\n"
+    "- False starts: 'I- I think', 'we- we should', 'so the- the main point'.\n"
+    "- Immediate repetitions: 'I I I think', '那个 那个'.\n"
+    "- Drawn-out hesitations: 'aaaaand', 'soooo', '嗯——'.\n\n"
+    "Be conservative. Only mark spans that are clearly speaker noise — not "
+    "deliberate emphasis, not meaningful pauses, not real uses of the words "
+    "above ('do you know him?' is a real question; 'actually, the answer is "
+    "yes' is real emphasis). When in doubt, leave it in. Each range should be "
+    "tight: just the noise, not the surrounding meaningful words.\n\n"
+    "Return word-index ranges via the propose_polish_cuts tool. Both indices "
+    "are inclusive."
+)
+
+POLISH_TOOL = {
+    "name": "propose_polish_cuts",
+    "description": "Submit word-index ranges to remove (filler sounds, false starts, repeats).",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "cuts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "from": {
+                            "type": "integer",
+                            "description": "Start word index (inclusive).",
+                        },
+                        "to": {
+                            "type": "integer",
+                            "description": "End word index (inclusive).",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "enum": ["filler", "repeat"],
+                            "description": (
+                                "filler = hesitation/verbal-tic; "
+                                "repeat = false start or immediate repetition."
+                            ),
+                        },
+                    },
+                    "required": ["from", "to", "reason"],
+                },
+            }
+        },
+        "required": ["cuts"],
+    },
+}
+
 
 CUTTING_TOOL = {
     "name": "propose_cuts",
@@ -228,9 +297,12 @@ class ClaudeProvider(LlmProvider):
         )
 
         t0 = time.monotonic()
+        # 16k headroom: Claude Sonnet supports plenty more, and the
+        # JSON-string-wrapping quirk roughly doubles output tokens —
+        # 8k was empirically truncating long-source cut lists.
         response = await self.client.messages.create(
             model=self.model,
-            max_tokens=8192,
+            max_tokens=16384,
             system=[
                 {
                     "type": "text",
@@ -258,19 +330,40 @@ class ClaudeProvider(LlmProvider):
             if block.type == "tool_use" and block.name == "propose_cuts":
                 cuts_raw = block.input.get("cuts", [])
                 # Claude occasionally serializes the array as a JSON-string
-                # rather than an actual list (model-output quirk); recover.
+                # rather than an actual list — and that string-wrapped
+                # form is roughly 2x more output tokens (every '"' becomes
+                # '\\"', etc.), which means it can hit max_tokens and arrive
+                # truncated. parse_json_array_partial salvages the complete
+                # objects so we ship the cuts that did make it instead of
+                # failing the whole pipeline.
                 if isinstance(cuts_raw, str):
+                    raw_text = cuts_raw
                     try:
-                        cuts_raw = json.loads(cuts_raw)
+                        cuts_raw = json.loads(raw_text)
                     except json.JSONDecodeError as e:
-                        raise RuntimeError(
-                            f"Claude returned cuts as a non-JSON string: "
-                            f"{cuts_raw[:200]!r}"
-                        ) from e
+                        cuts_raw = parse_json_array_partial(raw_text)
+                        if not cuts_raw:
+                            raise RuntimeError(
+                                f"Claude returned cuts as an unrecoverable "
+                                f"string: {raw_text[:200]!r}"
+                            ) from e
+                        log.warning(
+                            "Claude returned cuts as a JSON string and was "
+                            "truncated by max_tokens; recovered %d complete "
+                            "cut(s) from the partial output.",
+                            len(cuts_raw),
+                        )
                 if not isinstance(cuts_raw, list):
                     raise RuntimeError(
                         f"Claude returned cuts of unexpected type "
                         f"{type(cuts_raw).__name__}: {cuts_raw!r}"
+                    )
+                if response.stop_reason == "max_tokens":
+                    log.warning(
+                        "Claude propose_cuts hit max_tokens (output=%d) — "
+                        "consider raising the limit; got %d cut(s).",
+                        response.usage.output_tokens,
+                        len(cuts_raw),
                     )
                 out: list[Cut] = []
                 for c in cuts_raw:
@@ -289,3 +382,73 @@ class ClaudeProvider(LlmProvider):
                 return out, metrics
 
         raise RuntimeError("Claude returned no propose_cuts tool_use block")
+
+    async def propose_polish_cuts(
+        self,
+        transcript_segments: list[dict],
+        language: str | None,
+    ) -> list[PolishCut]:
+        words = flatten_words(transcript_segments)
+        if not words:
+            log.info("polish: no word-level data on transcript — skipping")
+            return []
+        word_text = render_word_list(words)
+        user_msg = (
+            f"Word list ({len(words)} words, format `idx: word`):\n{word_text}\n\n"
+            "Identify all spans worth removing via the propose_polish_cuts "
+            "tool. Stay conservative — only mark clear speaker noise."
+        )
+        t0 = time.monotonic()
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=[
+                    {
+                        "type": "text",
+                        "text": POLISH_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[{"role": "user", "content": user_msg}],
+                tools=[POLISH_TOOL],
+                tool_choice={"type": "tool", "name": "propose_polish_cuts"},
+            )
+        except Exception as e:
+            log.warning("polish: Claude call failed (%s) — skipping filler cuts", e)
+            return []
+        elapsed = time.monotonic() - t0
+        usage = response.usage
+        cost = _compute_cost_usd(usage)
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "propose_polish_cuts":
+                raw = block.input.get("cuts", [])
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except json.JSONDecodeError:
+                        log.warning("polish: Claude wrapped cuts as string and failed reparse")
+                        return []
+                if not isinstance(raw, list):
+                    log.warning(
+                        "polish: Claude returned cuts of type %s — dropping",
+                        type(raw).__name__,
+                    )
+                    return []
+                cuts = polish_cuts_from_index_ranges(words, raw)
+                log.info(
+                    "polish: 1 call, %d in (%d cache_read, %d cache_write), %d out, "
+                    "$%.4f, %.1fs → %d filler cuts (%d words; lang=%r)",
+                    getattr(usage, "input_tokens", 0) or 0,
+                    getattr(usage, "cache_read_input_tokens", 0) or 0,
+                    getattr(usage, "cache_creation_input_tokens", 0) or 0,
+                    getattr(usage, "output_tokens", 0) or 0,
+                    cost,
+                    elapsed,
+                    len(cuts),
+                    len(words),
+                    language,
+                )
+                return cuts
+        log.warning("polish: Claude returned no propose_polish_cuts tool_use block")
+        return []

@@ -10,11 +10,20 @@ import {
   type ReactNode,
 } from "react";
 import { api } from "./api";
-import type { Clip, Job, Project, ProjectDraft, Settings, Toast } from "./types";
+import type {
+  Clip,
+  Job,
+  Project,
+  ProjectCut,
+  ProjectDraft,
+  Settings,
+  Toast,
+} from "./types";
 
 type StoreValue = {
   projects: Project[];
   clipsByProject: Record<string, Clip[]>;
+  cutsByProject: Record<string, ProjectCut[]>;
   jobs: Job[];
   toasts: Toast[];
   settings: Settings;
@@ -22,6 +31,7 @@ type StoreValue = {
   loadProjects: () => Promise<void>;
   refreshProject: (id: string) => Promise<Project | null>;
   loadClips: (projectId: string) => Promise<void>;
+  loadProjectCuts: (projectId: string) => Promise<void>;
 
   createProject: (
     draft: ProjectDraft,
@@ -107,6 +117,7 @@ const FALLBACK_LIBRARY = "~/Library/Application Support/com.clipforge.app/projec
 export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [clipsByProject, setClipsByProject] = useState<Record<string, Clip[]>>({});
+  const [cutsByProject, setCutsByProject] = useState<Record<string, ProjectCut[]>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [extraJobs, setExtraJobs] = useState<Job[]>([]);
   const [settings, setSettings] = useState<Settings>({
@@ -181,6 +192,18 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
       console.error("Failed to load clips", e);
     }
   }, []);
+
+  const loadProjectCuts = useCallback<StoreValue["loadProjectCuts"]>(
+    async (projectId) => {
+      try {
+        const cs = await api.listProjectCuts(projectId);
+        setCutsByProject((cur) => ({ ...cur, [projectId]: cs }));
+      } catch (e) {
+        console.error("Failed to load project cuts", e);
+      }
+    },
+    [],
+  );
 
   const createProject = useCallback<StoreValue["createProject"]>(
     async (draft, onProgress) => {
@@ -362,12 +385,14 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
     () => ({
       projects,
       clipsByProject,
+      cutsByProject,
       jobs,
       toasts,
       settings,
       loadProjects,
       refreshProject,
       loadClips,
+      loadProjectCuts,
       createProject,
       updateProject,
       rerunProject,
@@ -384,12 +409,14 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
     [
       projects,
       clipsByProject,
+      cutsByProject,
       jobs,
       toasts,
       settings,
       loadProjects,
       refreshProject,
       loadClips,
+      loadProjectCuts,
       createProject,
       updateProject,
       rerunProject,

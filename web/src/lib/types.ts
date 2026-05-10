@@ -57,6 +57,18 @@ export type ClipVariant = "original" | "reframe";
 // list.
 export type ClipInterval = { startSec: number; endSec: number };
 
+// One source-time range the auto-cutter removed from the clip, tagged
+// with the reason it was taken out. The frontend uses this to render a
+// per-reason divider in the transcript and a per-reason tick on the
+// scrubber. `reason` is a string (not an enum) so the API can introduce
+// new reasons — the client falls back to the catch-all visual style
+// when it doesn't recognize the value.
+export type ClipRemovedCut = {
+  srcStart: number;
+  srcEnd: number;
+  reason: string;
+};
+
 export type Clip = {
   id: string;
   projectId: string;
@@ -72,6 +84,10 @@ export type Clip = {
   // entry; clips with no removable pauses contain the single
   // [(startSec, endSec)] interval.
   intervals: ClipInterval[];
+  // Source-time ranges removed inside the clip with reasons (long
+  // pause / filler word / …). Empty for legacy clips — `cutsFromClip`
+  // falls back to deriving pause cuts from interval gaps in that case.
+  removedCuts?: ClipRemovedCut[];
   variants: ClipVariant[];
   description: string;
   hashtags: string[];
@@ -119,11 +135,29 @@ export type TranscriptLine = { t: number; text: string };
 // faster-whisper segments with absolute source-time start/end.
 export type TranscriptSegment = { start: number; end: number; text: string };
 
-// Reasons the auto-cutter can remove material from a clip. Today only
-// `pause` is real (computed from the speech mask); the other three are
-// designed for so the visual system already accommodates them when we
-// land filler-word / repeat-phrase / low-value classifiers.
+// Reasons the auto-cutter can remove material from a clip. `pause` and
+// `filler` are real (produced by the backend speech mask + per-language
+// filler wordlist); `repeat` and `lowvalue` are placeholders for future
+// classifiers — the visual system already handles them.
 export type CutReason = "pause" | "filler" | "repeat" | "lowvalue";
+
+// One row in the project-wide Auto-cuts report. Carries enough context
+// to render the row without a follow-up request: pause cuts ship a
+// `pre`/`post` excerpt framing the silence; filler cuts ship the
+// removed `word` plus surrounding `pre`/`post` words. `clipId` is null
+// when the cut sits in a region the LLM didn't promote into a clip,
+// in which case the row is rendered non-navigable.
+export type ProjectCut = {
+  id: string;
+  sourceSec: number;
+  sourceEndSec: number;
+  removedSec: number;
+  reason: string;
+  clipId: string | null;
+  pre: string;
+  post: string;
+  word: string | null;
+};
 
 // One automatic cut surfaced to the user. `t` is clip-relative compact
 // time (0 = first frame the user sees), `afterIdx` is the index in the

@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     clipforge_whisper_model: str = "base"
     clipforge_workspace_dir: str = ""
 
+    # LLM-driven filler / repeat / false-start removal. Disabled by
+    # default after subjective testing surfaced over-aggressive cuts on
+    # real material — the model's calls don't reliably distinguish
+    # "verbal tic" from "deliberate emphasis" yet. Set the env var
+    # CLIPFORGE_POLISH_CUTS_ENABLED=true to re-enable for testing.
+    # Long-pause cutting is unaffected — it has its own (rule-based)
+    # path and runs regardless of this flag.
+    clipforge_polish_cuts_enabled: bool = False
+
     @property
     def workspace_dir(self) -> Path:
         if self.clipforge_workspace_dir:
