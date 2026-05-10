@@ -9,6 +9,7 @@ files) and prod (S3) once the prod store is wired up.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from dataclasses import dataclass
@@ -34,7 +35,24 @@ async def _run(*args: str) -> tuple[int, str, str]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await proc.communicate()
+    try:
+        out, err = await proc.communicate()
+    except asyncio.CancelledError:
+        # Caller was cancelled (e.g. client disconnected mid-download).
+        # Kill the subprocess so abandoned ffmpegs don't pile up and pin
+        # CPU/disk — a real failure mode on slow Windows laptops where
+        # the user mashes Download after the first attempt seems frozen.
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                with contextlib.suppress(BaseException):
+                    await proc.wait()
+        raise
     return (
         proc.returncode or 0,
         out.decode("utf-8", "replace"),
@@ -727,10 +745,16 @@ async def slice_clip(
 ) -> Path:
     """Render a clip from one or more source-time intervals.
 
-    A clip with a single interval renders the obvious sub-range. A clip
-    with multiple intervals (silence-removed) is built via filter_complex:
-    every interval becomes a (trim, atrim) pair, then everything is
-    concat'd. Single re-encode pass."""
+    Single-interval clips (the common case from a fresh AI proposal) take
+    the stream-copy fast path: ``ffmpeg -ss S -to E -i src -c copy``
+    snaps to the nearest preceding container keyframe and remuxes without
+    decode/encode, finishing in ~1s vs. 30-60s for a libx264 re-encode on
+    slow laptops. The keyframe snap means the cut is accurate to within a
+    GOP (~1-2s for typical recordings); fine for downloads.
+
+    Multi-interval clips (silence-removed) need real audio crossfades to
+    splice the disjoint ranges, so they fall through to a single
+    re-encode pass via filter_complex."""
     if not intervals:
         raise RuntimeError(f"slice_clip {clip_id}: no intervals provided")
     project = await _get_project(project_id)
@@ -738,6 +762,29 @@ async def slice_clip(
     if not src_path.exists():
         raise RuntimeError("Source file not found")
     out_path = pp.clip_path(project, clip_id)
+
+    if len(intervals) == 1:
+        s, e = intervals[0]
+        code, _, err = await _run(
+            ffmpeg_bin("ffmpeg"),
+            "-y",
+            "-ss",
+            f"{s:.3f}",
+            "-to",
+            f"{e:.3f}",
+            "-i",
+            str(src_path),
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-movflags",
+            "+faststart",
+            str(out_path),
+        )
+        if code != 0:
+            raise RuntimeError(f"ffmpeg slice (copy) failed: {err.strip()[-500:]}")
+        return out_path
 
     fc = _build_concat_filter(intervals)
     code, _, err = await _run(

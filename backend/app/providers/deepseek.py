@@ -54,11 +54,13 @@ PRICE_OUTPUT_PER_MTOK = 0.28
 CUTTING_SYSTEM_PROMPT = (
     "你是一名视频剪辑助手。给定一段长视频课程录像的转录文稿(带时间戳),以及用户关于"
     "如何将其切成适合社交媒体短视频的剪辑指示,请提出一组剪辑片段的时间边界。\n\n"
-    "每个剪辑片段应满足:\n"
-    "- 自成一体——以有力的开场或铺垫起,至自然的结论收尾。脱离前后文也能独立观看。\n"
-    "- 大致符合用户要求的时长。\n"
-    "- 与其他片段在内容上有明显的差异(避免明显重叠)。\n"
-    "- 落在自然的句子边界——选择一个干净利落的切分点。\n\n"
+    "**用户的剪辑指示是最高优先级**。请认真阅读并严格遵循,即使它与下方的默认偏好"
+    "冲突——以用户指示为准。\n\n"
+    "如果用户没有特别说明,以下偏好可作为参考(均可被用户指示覆盖):\n"
+    "- 每段尽量自成一体,有自然的开头与结尾。\n"
+    "- 时长接近用户要求的时长。\n"
+    "- 各片段在内容上有所区分,避免明显重叠。\n"
+    "- 切分点尽量落在自然的句子边界。\n\n"
     "转录文本可能是任何语言(中文、英文等)。每个片段的标题请使用与转录内容相同的语言"
     "书写,不要翻译。\n\n"
     "请通过调用 propose_cuts 工具返回你的答案。时间以秒为单位(小数也可)。\n"
@@ -297,11 +299,17 @@ class DeepSeekProvider(LlmProvider):
         else:
             window_note = ""
 
+        # The user's cutting instructions appear both before and after the
+        # transcript. Long transcripts (tens of thousands of tokens) push a
+        # single up-front instruction far from the model's "current focus,"
+        # so we restate it adjacent to the tool call to keep it weighted.
         user_msg = (
             f"源视频时长:{source_duration_sec:.1f} 秒。\n\n"
             f"{window_note}"
-            f"用户的剪辑指示:\n{cutting_prompt}\n\n"
+            f"用户的剪辑指示(最高优先级,请严格遵循):\n{cutting_prompt}\n\n"
             f"转录文稿(按片段时间戳):\n{transcript_text}\n\n"
+            f"再次提醒——请按照用户的剪辑指示提出剪辑边界,以下指示优先于任何默认偏好:\n"
+            f"{cutting_prompt}\n\n"
             "请通过 propose_cuts 工具返回剪辑片段的时间边界。"
         )
 

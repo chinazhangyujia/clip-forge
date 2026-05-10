@@ -1,7 +1,9 @@
+import asyncio
+import contextlib
 import json
 import time
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from .. import _project_paths as pp
@@ -14,6 +16,30 @@ router = APIRouter(prefix="/clips", tags=["clips"])
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+# Per-clip render locks for the on-demand download path. Without this,
+# a user mashing the Download button on a slow render spawns a fresh
+# ffmpeg per click and pegs CPU/disk. The dict is bounded by the number
+# of distinct clips downloaded in this process — small for a desktop app.
+_render_locks: dict[str, asyncio.Lock] = {}
+_render_locks_guard = asyncio.Lock()
+
+
+async def _get_render_lock(clip_id: str) -> asyncio.Lock:
+    async with _render_locks_guard:
+        lock = _render_locks.get(clip_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _render_locks[clip_id] = lock
+        return lock
+
+
+async def _watch_disconnect(request: Request) -> None:
+    while True:
+        if await request.is_disconnected():
+            return
+        await asyncio.sleep(1.0)
 
 
 @router.get("/{clip_id}", response_model=Clip, response_model_by_alias=True)
@@ -156,7 +182,7 @@ async def get_variant(clip_id: str, variant: str) -> FileResponse:
 
 
 @router.get("/{clip_id}/download")
-async def download_clip(clip_id: str) -> FileResponse:
+async def download_clip(clip_id: str, request: Request) -> FileResponse:
     ds = get_datastore()
     row = await ds.get_clip(clip_id)
     if row is None:
@@ -168,19 +194,46 @@ async def download_clip(clip_id: str) -> FileResponse:
     path = pp.clip_path(project, clip_id)
 
     if row.needs_render or not path.exists():
-        intervals = [(iv.start_sec, iv.end_sec) for iv in row.intervals] or [
-            (row.start_sec, row.end_sec)
-        ]
-        try:
-            await pipeline.slice_clip(row.project_id, clip_id, intervals)
-        except Exception as e:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                f"Failed to render clip: {e}",
-            ) from e
-        await ds.update_clip(
-            clip_id, {"needs_render": False, "updated_at": _now_ms()}
-        )
+        lock = await _get_render_lock(clip_id)
+        async with lock:
+            row = await ds.get_clip(clip_id)
+            if row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
+            if row.needs_render or not path.exists():
+                intervals = [(iv.start_sec, iv.end_sec) for iv in row.intervals] or [
+                    (row.start_sec, row.end_sec)
+                ]
+                # Race the render against a disconnect watcher so a closed
+                # tab cancels ffmpeg instead of leaving it pinned to the
+                # CPU producing output nobody is waiting for.
+                render_task = asyncio.create_task(
+                    pipeline.slice_clip(row.project_id, clip_id, intervals)
+                )
+                disconnect_task = asyncio.create_task(_watch_disconnect(request))
+                done, pending = await asyncio.wait(
+                    {render_task, disconnect_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+                    with contextlib.suppress(BaseException):
+                        await t
+                if render_task in done:
+                    try:
+                        render_task.result()
+                    except Exception as e:
+                        raise HTTPException(
+                            status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            f"Failed to render clip: {e}",
+                        ) from e
+                    await ds.update_clip(
+                        clip_id, {"needs_render": False, "updated_at": _now_ms()}
+                    )
+                else:
+                    # Client disconnected; render was cancelled. The
+                    # response will never reach the client but we still
+                    # need a status to terminate the route cleanly.
+                    raise HTTPException(499, "Client disconnected")
 
     safe_title = (row.title or clip_id).replace("/", "-").replace("\\", "-")
     return FileResponse(
