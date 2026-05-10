@@ -4,14 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon, Spinner } from "@/lib/icons";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import type { Clip, ClipVariant } from "@/lib/types";
-
-type VariantOpt = {
-  key: ClipVariant;
-  label: string;
-  has: boolean;
-  stale: boolean;
-};
+import type { Clip } from "@/lib/types";
 
 type Phase = "encoding" | "saving" | "done" | "error";
 
@@ -207,15 +200,8 @@ const DownloadChip = ({ job, onCancel, stuck }: ChipProps) => {
   );
 };
 
-export const DownloadControl = ({
-  clip,
-  variants,
-}: {
-  clip: Clip;
-  variants: VariantOpt[];
-}) => {
+export const DownloadControl = ({ clip }: { clip: Clip }) => {
   const { pushToast, addJob, removeJob } = useStore();
-  const [open, setOpen] = useState(false);
   const [job, setJob] = useState<DownloadJob | null>(null);
   const [stuck, setStuck] = useState(false);
   // Tracker: when the active job's id changes, reset `stuck` during render
@@ -226,18 +212,6 @@ export const DownloadControl = ({
     setStuckTrackedJobId(currentJobId);
     setStuck(false);
   }
-  const popRef = useRef<HTMLDivElement>(null);
-
-  // Close the dropdown when clicking outside.
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, []);
 
   // After ~10s of an in-flight job with no terminal state, show the "Still
   // working…" hint. The reset on job-change is handled by the tracker above.
@@ -252,102 +226,91 @@ export const DownloadControl = ({
   // Held by ref so the failure-toast's Retry action can re-invoke the latest
   // `start` without `start` having to close over itself (which would create a
   // forward-reference cycle).
-  const startRef = useRef<(v: ClipVariant) => void>(() => {});
+  const startRef = useRef<() => void>(() => {});
 
-  const start = useCallback(
-    (variantKey: ClipVariant) => {
-      if (job) return; // duplicate-click guard
+  const start = useCallback(() => {
+    if (job) return; // duplicate-click guard
 
-      const abort = new AbortController();
-      const jobId = `dl-${clip.id}-${Date.now()}`;
+    const abort = new AbortController();
+    const jobId = `dl-${clip.id}-${Date.now()}`;
 
-      setJob({
-        phase: "encoding",
-        startedAt: Date.now(),
-        jobId,
-        abort,
-      });
+    setJob({
+      phase: "encoding",
+      startedAt: Date.now(),
+      jobId,
+      abort,
+    });
 
-      addJob({
-        id: jobId,
-        projectId: clip.projectId,
-        label: `Downloading clip — ${clip.title}`,
-        stage: "download",
-        progress: 0,
-        status: "running",
-        indeterminate: true,
-      });
+    addJob({
+      id: jobId,
+      projectId: clip.projectId,
+      label: `Downloading clip — ${clip.title}`,
+      stage: "download",
+      progress: 0,
+      status: "running",
+      indeterminate: true,
+    });
 
-      // Original = lazily-rendered 16:9 source-cut. Reframe = pre-rendered
-      // 9:16 vertical variant served from /clips/{id}/variants/reframe.
-      // Suffix the filename so the user gets two distinguishable files
-      // when they download both variants.
-      const url =
-        variantKey === "reframe"
-          ? api.variantUrl(clip.id, "reframe")
-          : api.clipDownloadUrl(clip.id);
-      const filename =
-        variantKey === "reframe" ? `${safeName} (9x16).mp4` : `${safeName}.mp4`;
+    const url = api.clipDownloadUrl(clip.id);
+    const filename = `${safeName}.mp4`;
 
-      (async () => {
-        try {
-          const res = await fetch(url, { signal: abort.signal });
-          if (!res.ok) {
-            throw new Error(`Server returned ${res.status}`);
-          }
-          // Move chip into "Saving…" while we materialize the blob.
-          setJob((prev) => (prev ? { ...prev, phase: "saving" } : prev));
-          const blob = await res.blob();
-
-          // Trigger the browser's save dialog with a synthetic anchor click.
-          const objUrl = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = objUrl;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(objUrl);
-
-          setJob((prev) => (prev ? { ...prev, phase: "done" } : prev));
-          // Brief 1s success flash, then collapse and toast.
-          window.setTimeout(() => {
-            setJob(null);
-            removeJob(jobId);
-            pushToast({
-              kind: "success",
-              title: "Download ready",
-              body: `${filename} saved`,
-              duration: 5000,
-            });
-          }, 1000);
-        } catch (e) {
-          if (abort.signal.aborted) {
-            return;
-          }
-          const message = e instanceof Error ? e.message : String(e);
-          setJob((prev) =>
-            prev ? { ...prev, phase: "error", error: message } : prev,
-          );
-          window.setTimeout(() => {
-            setJob(null);
-            removeJob(jobId);
-          }, 800);
-          pushToast({
-            kind: "error",
-            title: "Download failed",
-            body: message,
-            duration: 6000,
-            action: {
-              label: "Retry",
-              onClick: () => startRef.current(variantKey),
-            },
-          });
+    (async () => {
+      try {
+        const res = await fetch(url, { signal: abort.signal });
+        if (!res.ok) {
+          throw new Error(`Server returned ${res.status}`);
         }
-      })();
-    },
-    [clip, job, safeName, addJob, removeJob, pushToast],
-  );
+        // Move chip into "Saving…" while we materialize the blob.
+        setJob((prev) => (prev ? { ...prev, phase: "saving" } : prev));
+        const blob = await res.blob();
+
+        // Trigger the browser's save dialog with a synthetic anchor click.
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objUrl);
+
+        setJob((prev) => (prev ? { ...prev, phase: "done" } : prev));
+        // Brief 1s success flash, then collapse and toast.
+        window.setTimeout(() => {
+          setJob(null);
+          removeJob(jobId);
+          pushToast({
+            kind: "success",
+            title: "Download ready",
+            body: `${filename} saved`,
+            duration: 5000,
+          });
+        }, 1000);
+      } catch (e) {
+        if (abort.signal.aborted) {
+          return;
+        }
+        const message = e instanceof Error ? e.message : String(e);
+        setJob((prev) =>
+          prev ? { ...prev, phase: "error", error: message } : prev,
+        );
+        window.setTimeout(() => {
+          setJob(null);
+          removeJob(jobId);
+        }, 800);
+        pushToast({
+          kind: "error",
+          title: "Download failed",
+          body: message,
+          duration: 6000,
+          action: {
+            label: "Retry",
+            onClick: () => startRef.current(),
+          },
+        });
+      }
+    })();
+  }, [clip, job, safeName, addJob, removeJob, pushToast]);
 
   // Keep the ref pointed at the latest `start`. React 19 disallows ref writes
   // during render, so route through a passive effect.
@@ -368,69 +331,9 @@ export const DownloadControl = ({
   }
 
   return (
-    <div ref={popRef} style={{ position: "relative" }}>
-      <button className="btn btn-primary" onClick={() => setOpen((o) => !o)}>
-        <Icon name="download" size={14} />
-        Download
-        <Icon name="chevronDown" size={13} />
-      </button>
-      {open && (
-        <div className="popover" style={{ width: 240 }}>
-          <div className="popover-head">
-            <span>Available Variants</span>
-          </div>
-          {variants.map((v) => {
-            // Original is always rendered on demand; non-original variants
-            // need a successful prior render and not be marked stale.
-            const enabled =
-              v.key === "original" || (v.has && !v.stale);
-            const tooltip =
-              v.key === "original"
-                ? ""
-                : !v.has
-                  ? "Generate this variant first."
-                  : v.stale
-                    ? "Stale — regenerate before downloading."
-                    : "";
-            return (
-              <button
-                key={v.key}
-                disabled={!enabled}
-                onClick={() => {
-                  if (!enabled) return;
-                  setOpen(false);
-                  start(v.key);
-                }}
-                title={tooltip}
-                style={{
-                  display: "flex",
-                  width: "100%",
-                  padding: "10px 14px",
-                  alignItems: "center",
-                  gap: 10,
-                  fontSize: 13,
-                  opacity: enabled ? 1 : 0.4,
-                  cursor: enabled ? "pointer" : "not-allowed",
-                  borderBottom: "1px solid var(--border)",
-                  color: "inherit",
-                  textAlign: "left",
-                }}
-              >
-                <span style={{ color: "var(--fg-faint)" }}>
-                  <Icon name={enabled ? "download" : "x"} size={13} />
-                </span>
-                <span style={{ flex: 1, textAlign: "left" }}>{v.label}</span>
-                <span
-                  className="mono"
-                  style={{ fontSize: 10, color: "var(--fg-faint)" }}
-                >
-                  MP4
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <button className="btn btn-primary" onClick={start}>
+      <Icon name="download" size={14} />
+      Download
+    </button>
   );
 };

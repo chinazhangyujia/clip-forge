@@ -282,8 +282,6 @@ export const generateClips = (projectId: string, count: number): Clip[] => {
     const dur = 28 + Math.floor(Math.random() * 60);
     const start = cursor;
     cursor += dur + 60 + Math.floor(Math.random() * 600);
-    const variants: Clip["variants"] = ["original"];
-    if (Math.random() > 0.5) variants.push("reframe");
     arr.push({
       id: `${projectId}-c${i + 1}`,
       projectId,
@@ -296,7 +294,6 @@ export const generateClips = (projectId: string, count: number): Clip[] => {
       // when silence has been removed; the mocks just fall back to the
       // legacy single-band rendering.
       intervals: [{ startSec: start, endSec: start + dur }],
-      variants,
       description:
         "A short, hook-first clip pulled automatically from the source recording. Edit this description before posting.",
       hashtags: ["CourseCreator", "Teaching", "ContentTips", "Hooks"],

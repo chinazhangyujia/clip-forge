@@ -2,13 +2,13 @@
 
 ## Project overview
 
-ClipForge takes a long course recording (typically 2–4 hours of video with audio) and automatically produces a set of short, social-media-ready clips. The user provides a high-level cutting prompt that describes how the long video should be segmented; the system handles transcription, segmentation, reframing, and packaging.
+ClipForge takes a long course recording (typically 2–4 hours of video with audio) and automatically produces a set of short, social-media-ready clips. The user provides a high-level cutting prompt that describes how the long video should be segmented; the system handles transcription, segmentation, and packaging.
 
 The target user is a course creator who currently does this work by hand and wants to reclaim hours per upload.
 
 ## Local-first architecture
 
-ClipForge runs as a **local-first desktop app**. Heavy compute (ffmpeg, Whisper, YOLO) executes on the user's machine; the only cloud calls are to LLM providers for cutting decisions and metadata generation. This avoids 5–20 GB uploads, cross-border data residency concerns, and ongoing cloud storage costs.
+ClipForge runs as a **local-first desktop app**. Heavy compute (ffmpeg, Whisper) executes on the user's machine; the only cloud calls are to LLM providers for cutting decisions and metadata generation. This avoids 5–20 GB uploads, cross-border data residency concerns, and ongoing cloud storage costs.
 
 The same app supports two regional configurations without rewrites:
 
@@ -21,7 +21,6 @@ The same app supports two regional configurations without rewrites:
 |---|---|---|
 | LLM (long context) | Anthropic Claude | Qwen / Kimi / DeepSeek / GLM |
 | Speech-to-text | Bundled `whisper.cpp` | Bundled `whisper.cpp` |
-| Person detection | Bundled YOLOv8 via ONNX Runtime | Same |
 | Video / audio processing | Bundled ffmpeg | Same |
 | Workspace storage | User-picked local directory | Same |
 | Job execution | In-process Python worker | Same |
@@ -31,7 +30,7 @@ The only runtime swap point is the cloud LLM provider, which lives behind a thin
 
 ## MVP feature scope
 
-Four features ship in the MVP. Anything not listed here is out of scope.
+Three features ship in the MVP. Anything not listed here is out of scope.
 
 ### 1. Core: prompt-driven clip cutting
 
@@ -46,25 +45,15 @@ Four features ship in the MVP. Anything not listed here is out of scope.
 
 ### 2. Manual clip boundary tuning
 
-After the auto-cutter produces its initial set of clips, the user can adjust any clip's start / end timestamps before generating downstream variants or downloading. This is a purely local interaction — no LLM call, no pipeline re-run. The intended flow is: AI cut → review and tune per clip → generate reframe / captions on satisfied clips → download.
+After the auto-cutter produces its initial set of clips, the user can adjust any clip's start / end timestamps before downloading. This is a purely local interaction — no LLM call, no pipeline re-run. The intended flow is: AI cut → review and tune per clip → download.
 
 - **Input:** A clip's current `{startSec, endSec}` from `cuts.json`, plus the source video's full duration and the word-level transcript.
 - **UI:** In the Clip Detail view, a trim track shows a windowed view of the source — `clipDuration + max(clipDuration × 0.5, 15s)` of margin on each side, clamped to `[0, sourceDurationSec]`. The clip is rendered as a draggable band; the auto-cutter's original bounds are marked as ticks inside it. Two handles let the user shift either boundary, and `mm:ss.s` numeric inputs mirror the handles. Either boundary can move freely within `[0, sourceDurationSec]` — the user can extend a clip beyond the auto-cutter's original bounds, not just shrink it. When a handle is dragged to the edge of the visible window, the window auto-pans to follow it (the non-dragged boundary stays fixed in source-time). Overlap with neighboring clips is allowed; neighbors that fall within the visible window render as faint, non-interactive context bands.
 - **Snap-to-sentence:** Defaults on; drags snap to sentence boundaries derived from the same word-level transcript the auto-cutter used. The user can toggle to frame-precise mode.
-- **Persistence:** Edits update `{startSec, endSec}` in `cuts.json`. The source video is not re-sliced until the user triggers a downstream action (reframe, captions, download).
-- **Variant invalidation:** If a clip already has a generated reframe or caption variant, trimming marks those variants as stale. The UI requires regeneration before stale variants can be downloaded.
-- **Output:** The trimmed clip flows into reframe (feature 3) and packaging (feature 4) the same way an auto-cut clip does.
+- **Persistence:** Edits update `{startSec, endSec}` in `cuts.json`. The source video is not re-sliced until the user downloads the clip.
+- **Output:** The trimmed clip flows into packaging (feature 3) the same way an auto-cut clip does.
 
-### 3. Zoom-and-follow (auto vertical reframe with instructor tracking)
-
-For each output clip, produce a 9:16 vertical version where the camera frame tracks the instructor:
-
-- Per-frame person detection using YOLOv8 or MediaPipe.
-- Smooth the bounding box over time (Kalman filter or exponential smoothing with hysteresis) so the virtual camera doesn't jitter or lag.
-- Crop a 9:16 window that follows the smoothed center, defaulting to including the instructor's full upper body.
-- Multi-person handling: track the dominant speaker. Robust speaker-vs-whiteboard logic is a stretch goal within MVP — a simple "widen crop when instructor faces away" heuristic is acceptable.
-
-### 4. Content packaging per clip
+### 3. Content packaging per clip
 
 For each clip, produce the metadata and visual treatment a creator would otherwise add by hand:
 
@@ -109,7 +98,7 @@ We will maintain a small eval set of "good clip vs. bad clip" examples sourced f
 
 ## Distribution & packaging
 
-ClipForge ships as a desktop app that wraps the existing Next.js + FastAPI stack in a [Tauri](https://tauri.app/) shell. The app contains every dependency the user needs — they install ClipForge, they don't install Python / ffmpeg / Whisper / YOLO separately.
+ClipForge ships as a desktop app that wraps the existing Next.js + FastAPI stack in a [Tauri](https://tauri.app/) shell. The app contains every dependency the user needs — they install ClipForge, they don't install Python / ffmpeg / Whisper separately.
 
 ### Platform support
 
@@ -125,19 +114,16 @@ Linux is not an MVP target but stays achievable since the underlying tooling is 
 | Tauri app shell | ~10 MB | Rust core + native webview |
 | Bundled ffmpeg static binary | ~70 MB | Tauri sidecar; prebuilt per platform |
 | Embedded Python runtime + deps | ~100 MB | `python-build-standalone` distribution |
-| ONNX Runtime (for YOLO) | ~30 MB | Cross-platform binary |
 | `whisper.cpp` binary | ~5 MB | Apple Metal on Mac, CPU/CUDA on Windows |
 | Whisper "base" model | ~150 MB | Bundled good-enough default |
-| YOLOv8n model | ~50 MB | Bundled good-enough default |
 
-Target installer size: ~250 MB.
+Target installer size: ~200 MB.
 
 ### First-launch downloads (optional, opt-in)
 
 - Whisper large-v3 (~3 GB) for higher transcription accuracy
-- YOLOv8x (~250 MB) for better person detection
 
-The first-launch wizard offers these as a one-click upgrade with a progress bar. The app remains usable on the bundled small models if the user skips the upgrade.
+The first-launch wizard offers this as a one-click upgrade with a progress bar. The app remains usable on the bundled small model if the user skips the upgrade.
 
 ### Distribution phases
 

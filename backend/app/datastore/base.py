@@ -73,8 +73,6 @@ class ClipRow(BaseModel):
     # clips have an empty list; the API DTO falls back to deriving pause
     # cuts from interval gaps for those.
     removed_cuts: list[ClipRemovedCut] = Field(default_factory=list)
-    variants: list[str] = Field(default_factory=lambda: ["original"])
-    stale_variants: list[str] = Field(default_factory=list)
     needs_render: bool = True
     description: str = ""
     hashtags: list[str] = Field(default_factory=list)

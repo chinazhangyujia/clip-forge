@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from .. import _project_paths as pp
-from .. import jobs, pipeline, silence
+from .. import pipeline, silence
 from ..datastore import get_datastore
 from ..schemas import Clip, ClipUpdate, clip_row_to_dto
 
@@ -106,13 +106,6 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
         # feature shipped.
         intervals = [{"start_sec": body.start_sec, "end_sec": body.end_sec}]
 
-    # If a reframe variant already existed it's now invalidated — the
-    # face trajectory was computed against the old interval set. Mark
-    # stale so the UI shows it greyed out and the user can regenerate.
-    stale = list(existing.stale_variants)
-    if "reframe" in existing.variants and "reframe" not in stale:
-        stale.append("reframe")
-
     updated = await ds.update_clip(
         clip_id,
         {
@@ -121,7 +114,6 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
             "intervals": intervals,
             "removed_cuts": removed_cuts,
             "needs_render": True,
-            "stale_variants": stale,
             "updated_at": _now_ms(),
         },
     )
@@ -130,55 +122,6 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
     # download) is now stale; the next download will re-render with the new
     # bounds. In-browser review uses the source video + bounds directly.
     return clip_row_to_dto(updated)
-
-
-@router.post("/{clip_id}/reframe", response_model=Clip, response_model_by_alias=True)
-async def render_reframe(clip_id: str) -> Clip:
-    """Kick off a 9:16 vertical-reframe render in the background. Returns
-    the current clip row immediately; the frontend polls (via the regular
-    list-clips endpoint) until `variants` includes 'reframe' and
-    `staleVariants` does not."""
-    ds = get_datastore()
-    existing = await ds.get_clip(clip_id)
-    if existing is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
-    await jobs.enqueue_render_reframe(existing.project_id, clip_id)
-    return clip_row_to_dto(existing)
-
-
-@router.get("/{clip_id}/variants/{variant}")
-async def get_variant(clip_id: str, variant: str) -> FileResponse:
-    """Serve a non-original clip variant — currently just 'reframe'.
-    The variant must already be rendered; we don't lazily render here
-    (unlike /download for the original) because reframe rendering is
-    user-triggered and tracked through the job queue."""
-    if variant not in {"reframe"}:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown variant {variant!r}")
-    ds = get_datastore()
-    row = await ds.get_clip(clip_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
-    project = await ds.get_project(row.project_id)
-    if project is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
-    if variant not in row.variants or variant in row.stale_variants:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"Variant {variant!r} not yet rendered for this clip",
-        )
-    path = pp.clip_variant_path(project, clip_id, variant)
-    if not path.exists():
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"Variant file missing on disk: {path.name}",
-        )
-    # No-store so a regenerated variant (after a trim) isn't served from
-    # the WebView's HTTP cache.
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 @router.get("/{clip_id}/download")

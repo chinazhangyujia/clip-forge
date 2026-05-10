@@ -741,7 +741,6 @@ const PipelineStage = ({
 
 const ClipCard = ({ clip, onClick }: { clip: Clip; onClick: () => void }) => {
   const [hover, setHover] = useState(false);
-  const hasReframe = clip.variants.includes("reframe");
 
   return (
     <div
@@ -790,30 +789,10 @@ const ClipCard = ({ clip, onClick }: { clip: Clip; onClick: () => void }) => {
           </span>
           <span className="mono">{fmtDuration(clip.duration)}</span>
         </div>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          <VariantChip active={hasReframe} label="Reframe" />
-        </div>
       </div>
     </div>
   );
 };
-
-const VariantChip = ({ active, label }: { active: boolean; label: string }) => (
-  <span
-    style={{
-      fontSize: 10,
-      padding: "2px 7px",
-      borderRadius: 4,
-      background: active ? "var(--accent-soft)" : "var(--bg-sunken)",
-      color: active ? "oklch(0.45 0.16 45)" : "var(--fg-faint)",
-      fontWeight: 500,
-      border: `1px solid ${active ? "oklch(0.85 0.07 50)" : "var(--border)"}`,
-    }}
-  >
-    {active && "✓ "}
-    {label}
-  </span>
-);
 
 const ClipThumb = ({ clip, hover }: { clip: Clip; hover: boolean }) => {
   const seed = clip.id.split("").reduce((a, c) => a + c.charCodeAt(0), 0);

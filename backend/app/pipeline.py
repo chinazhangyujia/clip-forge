@@ -18,7 +18,6 @@ from pathlib import Path
 from . import _project_paths as pp
 from . import audio_snap, silence
 from . import filler as filler_mod
-from . import reframe as reframe_mod
 from ._resources import ffmpeg_bin
 from .datastore import ProjectRow, get_datastore
 from .providers import get_provider
@@ -824,55 +823,4 @@ async def slice_clip(
     )
     if code != 0:
         raise RuntimeError(f"ffmpeg slice failed: {err.strip()[-500:]}")
-    return out_path
-
-
-async def slice_clip_reframe(
-    project_id: str, clip_id: str, intervals: list[tuple[float, float]]
-) -> Path:
-    """Render the 9:16 vertical-reframe variant of a clip.
-
-    Same multi-interval concat path as `slice_clip`, with a static
-    letterbox+pad applied after concat: the original 16:9 clip is
-    scaled to fit the 1080×1920 canvas width and centered vertically,
-    with a light-grey placeholder fill above and below."""
-    if not intervals:
-        raise RuntimeError(f"slice_clip_reframe {clip_id}: no intervals provided")
-    project = await _get_project(project_id)
-    src_path = pp.source_path(project)
-    if not src_path.exists():
-        raise RuntimeError("Source file not found")
-    out_path = pp.clip_variant_path(project, clip_id, "reframe")
-
-    suffix = reframe_mod.reframe_filter_suffix()
-    base_fc = _build_concat_filter(intervals)
-    # Splice the reframe suffix into the concat output's video stream.
-    fc = f"{base_fc};[outv]{suffix}[outv_r]"
-    code, _, err = await _run(
-        ffmpeg_bin("ffmpeg"),
-        "-y",
-        "-i",
-        str(src_path),
-        "-filter_complex",
-        fc,
-        "-map",
-        "[outv_r]",
-        "-map",
-        "[outa]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "22",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-movflags",
-        "+faststart",
-        str(out_path),
-    )
-    if code != 0:
-        raise RuntimeError(f"ffmpeg reframe failed: {err.strip()[-500:]}")
     return out_path

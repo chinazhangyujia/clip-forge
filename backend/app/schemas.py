@@ -86,13 +86,11 @@ class Clip(APIModel):
     # produced before reason-tagging shipped — frontend falls back to
     # deriving pause cuts from interval gaps in that case.
     removed_cuts: list[ClipRemovedCut]
-    variants: list[str]
     description: str
     hashtags: list[str]
     hook_text: str
     thumb_frame: int
     original: ClipOriginal
-    stale_variants: list[str]
     needs_render: bool
 
 
@@ -219,7 +217,6 @@ def clip_row_to_dto(row: ClipRow) -> Clip:
             ClipRemovedCut(src_start=c.src_start, src_end=c.src_end, reason=c.reason)
             for c in removed_cuts
         ],
-        variants=row.variants,
         description=row.description,
         hashtags=row.hashtags,
         hook_text=row.hook_text,
@@ -227,6 +224,5 @@ def clip_row_to_dto(row: ClipRow) -> Clip:
         original=ClipOriginal(
             start_sec=row.original_start_sec, end_sec=row.original_end_sec
         ),
-        stale_variants=row.stale_variants,
         needs_render=row.needs_render,
     )

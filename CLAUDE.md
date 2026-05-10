@@ -9,7 +9,7 @@ See [requirements.md](./requirements.md) for the full MVP scope and architectura
 ## Key constraints to keep in mind
 
 1. **Two deployment targets: US dev and China production.** Every external service used in the US dev build must have a feasible Chinese equivalent (Alicloud / iFlytek / Qwen / etc.). All provider-specific code must sit behind a thin interface so swapping is config-only. See requirements.md for the mapping.
-2. **MVP scope is fixed at four features:** core prompt-driven clip cutting, manual per-clip boundary tuning, zoom-and-follow vertical reframe, and content packaging (captions / hook / description / thumbnail / cold-open). Voice isolation, filler-word removal, highlight scoring, multi-clip timeline editing, and direct social posting are deferred — do not build them without confirmation.
+2. **MVP scope is fixed at three features:** core prompt-driven clip cutting, manual per-clip boundary tuning, and content packaging (hook / description / thumbnail / cold-open). Vertical reframe, voice isolation, filler-word removal, highlight scoring, multi-clip timeline editing, burned-in captions, and direct social posting are deferred — do not build them without confirmation.
 3. **Long-running jobs run on a worker, not in the request handler.**
 
 ## Common commands

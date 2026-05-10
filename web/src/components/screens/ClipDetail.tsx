@@ -20,15 +20,10 @@ import { CutDivider, CutTickRail, CutsSummary } from "@/components/Cuts";
 import type {
   Clip,
   ClipInterval,
-  ClipVariant,
   Cut,
   StageState,
   TranscriptSegment,
 } from "@/lib/types";
-
-type GenKind = "reframe" | null;
-
-type VariantOpt = { key: ClipVariant; label: string; has: boolean; stale: boolean };
 
 type PreviewBand = { start: number; end: number } | null;
 
@@ -49,11 +44,8 @@ export const ClipDetail = ({
   const clips = clipsByProject[projectId] || [];
   const clip = clips.find((c) => c.id === clipId);
 
-  const [variant, setVariant] = useState<ClipVariant>("original");
   const [isPlaying, setIsPlaying] = useState(false);
-  // currentSec is in source-time when playing the source URL with the
-  // skip-silence logic, and rendered-file time (= compact time) when
-  // playing a pre-rendered variant. Driven by the <video> element's events.
+  // currentSec is source-time, driven by the <video> element's events.
   const [currentSec, setCurrentSec] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   // Project-level speech mask — used as a backdrop in the trim panel and
@@ -61,12 +53,6 @@ export const ClipDetail = ({
   // drag. Empty array = legacy project with no mask, in which case the
   // trim panel falls back to single-band rendering.
   const [projectSpeechMask, setProjectSpeechMask] = useState<ClipInterval[]>([]);
-  // `generating` is set to a variant key while the backend job is in
-  // flight. The Generate button shows a spinner; we poll loadClips on a
-  // timer and clear when the variant appears in clip.variants (and isn't
-  // marked stale). Captions were dropped from MVP entirely; see
-  // lib/types.ts for the rationale.
-  const [generating, setGenerating] = useState<GenKind>(null);
   const [previewBand, setPreviewBand] = useState<PreviewBand>(null);
   // One-shot landing pill — appears briefly after navigating from the
   // project Auto-cuts report so the user sees where they landed. Cleared
@@ -107,52 +93,7 @@ export const ClipDetail = ({
     };
   }, [projectId]);
 
-  // Poll the clip list while a variant is generating so the UI flips out
-  // of "Generating…" automatically when the worker finishes the render.
-  // Each tick reuses the existing loadClips fetch — no special endpoint.
-  useEffect(() => {
-    if (!generating) return;
-    const tick = setInterval(() => {
-      loadClips(projectId);
-    }, 2500);
-    return () => clearInterval(tick);
-  }, [generating, projectId, loadClips]);
-
-  // Detect completion: when the requested variant appears in clip.variants
-  // and isn't stale, flip out of the generating state, switch the active
-  // tab to it, and tell the user. Uses the React 19 tracker pattern (see
-  // the InlineEdit component below for the canonical use) — an effect
-  // with setState would trip the strict next/react-hooks lint.
-  const [prevReadyVariant, setPrevReadyVariant] = useState<GenKind>(null);
-  const readyVariant: GenKind =
-    generating != null &&
-    clip != null &&
-    clip.variants.includes(generating) &&
-    !(clip.staleVariants ?? []).includes(generating)
-      ? generating
-      : null;
-  if (readyVariant !== prevReadyVariant) {
-    setPrevReadyVariant(readyVariant);
-    if (readyVariant != null) {
-      setGenerating(null);
-      setVariant(readyVariant);
-      // Toasts are a side effect; defer to next tick so we're not
-      // queuing one during render.
-      const v = readyVariant;
-      queueMicrotask(() =>
-        pushToast({
-          kind: "success",
-          title: "Vertical reframe ready",
-          body: "Switched to the 9:16 view.",
-        }),
-      );
-      void v;
-    }
-  }
-
-  // The Player owns its own seek-on-clip-change logic — it knows the
-  // active variant (source vs. reframe) and what the right start
-  // position is for each.
+  // The Player owns its own seek-on-clip-change logic.
 
   // Local edits for in-memory metadata (title, hashtags, etc.) — not yet
   // persisted to backend. Trim bounds go through the real updateClipBounds.
@@ -165,26 +106,6 @@ export const ClipDetail = ({
     const v = videoRef.current;
     if (v && v.readyState >= 1) {
       v.currentTime = sec;
-    }
-  };
-
-  const startReframeGeneration = async () => {
-    if (generating) return;
-    setGenerating("reframe");
-    try {
-      await api.generateReframe(clipId);
-      pushToast({
-        kind: "info",
-        title: "Generating vertical reframe…",
-        body: "Detecting the speaker and cropping to 9:16. This usually takes 30-60 seconds.",
-      });
-    } catch (e) {
-      setGenerating(null);
-      pushToast({
-        kind: "error",
-        title: "Couldn't start reframe",
-        body: String(e instanceof Error ? e.message : e),
-      });
     }
   };
 
@@ -202,23 +123,6 @@ export const ClipDetail = ({
       </div>
     );
   }
-
-  const hasReframe = clip.variants.includes("reframe");
-
-  const staleVariants = clip.staleVariants ?? [];
-  const isStale = (key: ClipVariant) => staleVariants.includes(key);
-
-  const variants: VariantOpt[] = [
-    { key: "original", label: "Original", has: true, stale: false },
-    {
-      key: "reframe",
-      label: "+ Vertical reframe",
-      has: hasReframe,
-      stale: isStale("reframe"),
-    },
-  ];
-
-  const anyStale = variants.some((v) => v.has && v.stale);
 
   const sourceDurationSec =
     project.file?.durationSec ?? Math.max(clip.endSec + 600, 600);
@@ -244,17 +148,10 @@ export const ClipDetail = ({
   );
   const cuts: Cut[] = cutsFromClip(clip, visibleSegments);
 
-  // Active cut: the one nearest the playhead within a small window — gives
-  // the divider the same brief subtle highlight beat the active transcript
-  // line uses. Compact-time clipTime drives this; reframe playback (which
-  // plays a pre-rendered file) is treated as compact already.
-  const reframeActive =
-    variant === "reframe" &&
-    clip.variants.includes("reframe") &&
-    !(clip.staleVariants ?? []).includes("reframe");
-  const compactNow = reframeActive
-    ? currentSec
-    : sourceToCompact(currentSec, clip.intervals);
+  // Active cut: the one nearest the playhead within a small window —
+  // gives the divider the same brief subtle highlight beat the active
+  // transcript line uses.
+  const compactNow = sourceToCompact(currentSec, clip.intervals);
   let activeCutId: string | null = null;
   if (isPlaying && cuts.length > 0) {
     let bestDist = 0.5;
@@ -275,12 +172,6 @@ export const ClipDetail = ({
         title: "Clip boundaries updated",
         body: `${fmtTime(startSec)} – ${fmtTime(endSec)} · ${(endSec - startSec).toFixed(1)}s`,
       });
-    }
-  };
-
-  const regenerate = (key: ClipVariant) => {
-    if (key === "reframe") {
-      void startReframeGeneration();
     }
   };
 
@@ -316,27 +207,13 @@ export const ClipDetail = ({
             </span>
             <span>·</span>
             <span>{fmtDuration(clip.duration)}</span>
-            <span>·</span>
-            <span>9:16 vertical</span>
           </div>
         </div>
-        <DownloadControl clip={clip} variants={variants} />
+        <DownloadControl clip={clip} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "flex-start" }}>
         <main>
-          <VariantTabs
-            variants={variants}
-            active={variant}
-            setActive={setVariant}
-            onGenerate={(k) => {
-              if (k === "reframe") void startReframeGeneration();
-            }}
-            generating={generating}
-          />
-          {anyStale && (
-            <StaleWarning variants={variants} onRegenerate={regenerate} generating={generating} />
-          )}
           <TrimPanel
             key={`${clip.id}:${clip.startSec}:${clip.endSec}`}
             clip={clip}
@@ -355,7 +232,6 @@ export const ClipDetail = ({
           <Player
             clip={clip}
             projectId={projectId}
-            variant={variant}
             videoRef={videoRef}
             isPlaying={isPlaying}
             setIsPlaying={setIsPlaying}
@@ -368,12 +244,6 @@ export const ClipDetail = ({
           {landedFlash && hint != null && (
             <LandingPill projectId={projectId} at={hint.at} />
           )}
-          <ActionBar
-            hasReframe={hasReframe}
-            generating={generating}
-            genProgress={generating === "reframe" ? -1 : 0}
-            onGenReframe={() => void startReframeGeneration()}
-          />
           <CutsSummary cuts={cuts} />
           <Transcript
             segments={transcript}
@@ -439,113 +309,9 @@ const LandingPill = ({ projectId, at }: { projectId: string; at: number }) => (
   </div>
 );
 
-const VariantTabs = ({
-  variants,
-  active,
-  setActive,
-  onGenerate,
-  generating,
-}: {
-  variants: VariantOpt[];
-  active: ClipVariant;
-  setActive: (v: ClipVariant) => void;
-  onGenerate: (k: GenKind) => void;
-  generating: GenKind;
-}) => (
-  <div
-    style={{
-      display: "flex",
-      background: "var(--bg-sunken)",
-      borderRadius: "var(--radius)",
-      padding: 4,
-      gap: 2,
-      marginBottom: 14,
-    }}
-  >
-    {variants.map((v) => {
-      const isActive = active === v.key;
-      const dim = !v.has;
-      const stale = v.has && v.stale;
-      return (
-        <button
-          key={v.key}
-          onClick={() => {
-            if (v.has) setActive(v.key);
-            else if (!generating) onGenerate(v.key as GenKind);
-          }}
-          style={{
-            flex: 1,
-            padding: "8px 12px",
-            borderRadius: 6,
-            background: isActive ? "var(--bg-elev)" : "transparent",
-            border: "none",
-            fontSize: 12.5,
-            fontWeight: isActive ? 500 : 400,
-            color:
-              dim || stale ? "var(--fg-faint)" : isActive ? "var(--fg)" : "var(--fg-muted)",
-            cursor: dim && generating ? "not-allowed" : "pointer",
-            boxShadow: isActive ? "var(--shadow-sm)" : "none",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            transition: "all .12s",
-            position: "relative",
-            textAlign: "center",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            opacity: stale ? 0.7 : 1,
-          }}
-        >
-          <span
-            style={{
-              textDecoration: stale ? "line-through" : "none",
-              textDecorationColor: "var(--fg-faint)",
-            }}
-          >
-            {v.label}
-          </span>
-          {dim && (
-            <span
-              style={{
-                fontSize: 10,
-                padding: "1px 6px",
-                borderRadius: 999,
-                background: "var(--bg-elev)",
-                color: "var(--fg-faint)",
-                fontWeight: 500,
-                border: "1px solid var(--border)",
-              }}
-            >
-              Generate
-            </span>
-          )}
-          {stale && (
-            <span
-              style={{
-                fontSize: 10,
-                padding: "1px 6px",
-                borderRadius: 999,
-                background: "oklch(0.97 0.04 75)",
-                color: "oklch(0.5 0.13 75)",
-                fontWeight: 500,
-                border: "1px solid oklch(0.9 0.06 75)",
-              }}
-            >
-              Stale
-            </span>
-          )}
-        </button>
-      );
-    })}
-  </div>
-);
-
 const Player = ({
   clip,
   projectId,
-  variant,
   videoRef,
   isPlaying,
   setIsPlaying,
@@ -557,7 +323,6 @@ const Player = ({
 }: {
   clip: Clip;
   projectId: string;
-  variant: ClipVariant;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   isPlaying: boolean;
   setIsPlaying: (p: boolean) => void;
@@ -570,41 +335,24 @@ const Player = ({
   seekHint?: number;
   seekHintKey?: string;
 }) => {
-  // The 9:16 variant plays a pre-rendered MP4 that's already silence-
-  // removed, so we drop the source-time skip-silence machinery and treat
-  // it as a single interval [0, clip.duration]. Source playback keeps
-  // the multi-interval logic that jumps over removed pauses live.
-  const reframeReady =
-    clip.variants.includes("reframe") &&
-    !(clip.staleVariants ?? []).includes("reframe");
-  const usingReframe = variant === "reframe" && reframeReady;
-  const isVertical = variant === "reframe";
-
-  const intervals: ClipInterval[] = usingReframe
-    ? [{ startSec: 0, endSec: clip.duration }]
-    : clip.intervals;
+  const intervals: ClipInterval[] = clip.intervals;
   const firstStart = intervals[0]?.startSec ?? clip.startSec;
-  const videoSrc = usingReframe
-    ? api.variantUrl(clip.id, "reframe")
-    : api.sourceUrl(projectId);
+  const videoSrc = api.sourceUrl(projectId);
 
   // When the user switches clips inside the same project, the source
   // <video> element is reused (sourceUrl is project-scoped) and won't
   // emit `loadedmetadata` again — manually seek to this clip's start.
-  // For reframe playback the variant URL changes per clip so a fresh
-  // load fires automatically; this effect just no-ops in that case.
   useEffect(() => {
     const v = videoRef.current;
     if (v && v.readyState >= 1) v.currentTime = firstStart;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip.id, firstStart, usingReframe]);
+  }, [clip.id, firstStart]);
 
   // Apply the deep-link seek hint from the Auto-cuts report. Runs after
-  // the metadata-driven first-start seek so it wins. Reframe is skipped
-  // — `seekHint` is source-time and the variant plays a pre-rendered
-  // file. `seekHintKey` keys the effect so it fires once per landing.
+  // the metadata-driven first-start seek so it wins. `seekHintKey` keys
+  // the effect so it fires once per landing.
   useEffect(() => {
-    if (seekHint == null || usingReframe) return;
+    if (seekHint == null) return;
     const v = videoRef.current;
     if (!v) return;
     const apply = () => {
@@ -615,7 +363,7 @@ const Player = ({
     else v.addEventListener("loadedmetadata", apply, { once: true });
     return () => v.removeEventListener("loadedmetadata", apply);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip.id, seekHintKey, usingReframe]);
+  }, [clip.id, seekHintKey]);
 
   // Clip-relative time for the controls + cold-open hook gating. With
   // silence removal, this is COMPACT time — `clip.duration` already comes
@@ -683,12 +431,9 @@ const Player = ({
       <div
         style={{
           position: "relative",
-          aspectRatio: isVertical ? "9 / 16" : "16 / 9",
-          maxHeight: isVertical ? 560 : "unset",
-          margin: isVertical ? "0 auto" : 0,
-          width: isVertical ? "auto" : "100%",
+          aspectRatio: "16 / 9",
+          width: "100%",
           background: "oklch(0.08 0.005 60)",
-          transition: "aspect-ratio .25s",
         }}
       >
         <video
@@ -717,7 +462,7 @@ const Player = ({
               right: "8%",
               color: "white",
               fontWeight: 800,
-              fontSize: isVertical ? 32 : 38,
+              fontSize: 38,
               letterSpacing: "-0.02em",
               textAlign: "center",
               textShadow: "0 2px 16px oklch(0 0 0 / 0.5)",
@@ -762,25 +507,6 @@ const Player = ({
           </button>
         )}
 
-        {isVertical && (
-          <div
-            className="mono"
-            style={{
-              position: "absolute",
-              top: 12,
-              left: 12,
-              background: "oklch(0 0 0 / 0.6)",
-              color: "white",
-              padding: "3px 8px",
-              borderRadius: 4,
-              fontSize: 10,
-              letterSpacing: 0.05,
-              pointerEvents: "none",
-            }}
-          >
-            ZOOM &amp; FOLLOW · 9:16
-          </div>
-        )}
       </div>
 
       <div
@@ -830,103 +556,6 @@ const Player = ({
         </div>
       </div>
     </div>
-  );
-};
-
-const ActionBar = ({
-  hasReframe,
-  generating,
-  genProgress,
-  onGenReframe,
-}: {
-  hasReframe: boolean;
-  generating: GenKind;
-  genProgress: number;
-  onGenReframe: () => void;
-}) => {
-  const status = generating === "reframe" ? "Detecting instructor…" : null;
-  return (
-    <div style={{ marginTop: 14 }}>
-      <ActionButton
-        label="Generate vertical reframe"
-        icon="crop"
-        active={generating === "reframe"}
-        progress={genProgress}
-        status={status}
-        done={hasReframe}
-        onClick={onGenReframe}
-        disabled={Boolean(generating) || hasReframe}
-      />
-    </div>
-  );
-};
-
-const ActionButton = ({
-  label,
-  icon,
-  active,
-  progress,
-  status,
-  done,
-  onClick,
-  disabled,
-}: {
-  label: string;
-  icon: "crop";
-  active: boolean;
-  progress: number;
-  status: string | null;
-  done: boolean;
-  onClick: () => void;
-  disabled: boolean;
-}) => {
-  if (active) {
-    return (
-      <div className="card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ color: "var(--accent)" }}>
-          <Spinner size={16} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>
-            {status}{" "}
-            <span className="mono" style={{ color: "var(--accent)" }}>
-              {Math.floor(progress)}%
-            </span>
-          </div>
-          <div style={{ marginTop: 6, height: 3, background: "var(--bg-sunken)", borderRadius: 999, overflow: "hidden" }}>
-            <div
-              style={{
-                height: "100%",
-                width: `${progress}%`,
-                background: "var(--accent)",
-                borderRadius: 999,
-                transition: "width .25s",
-              }}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={done ? "btn" : "btn btn-primary"}
-      style={{
-        height: "auto",
-        padding: 14,
-        justifyContent: "flex-start",
-        opacity: disabled && !done ? 0.55 : 1,
-      }}
-    >
-      <span style={{ flexShrink: 0 }}>
-        <Icon name={done ? "check" : icon} size={16} />
-      </span>
-      <span style={{ flex: 1, textAlign: "left" }}>
-        {done ? `${label.replace("Generate ", "").replace(/^./, (c) => c.toUpperCase())} ready` : label}
-      </span>
-    </button>
   );
 };
 
@@ -1097,59 +726,6 @@ const Transcript = ({
             ];
           })
         )}
-      </div>
-    </div>
-  );
-};
-
-const StaleWarning = ({
-  variants,
-  onRegenerate,
-  generating,
-}: {
-  variants: VariantOpt[];
-  onRegenerate: (key: ClipVariant) => void;
-  generating: GenKind;
-}) => {
-  const stale = variants.filter((v) => v.has && v.stale);
-  if (stale.length === 0) return null;
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: "10px 14px",
-        marginBottom: 14,
-        borderRadius: "var(--radius)",
-        border: "1px solid oklch(0.9 0.06 75)",
-        background: "oklch(0.98 0.025 75)",
-        flexWrap: "wrap",
-      }}
-    >
-      <span style={{ color: "oklch(0.5 0.13 75)", display: "inline-flex", flexShrink: 0 }}>
-        <Icon name="alert" size={14} />
-      </span>
-      <span style={{ fontSize: 12.5, color: "oklch(0.4 0.08 75)", flex: 1, minWidth: 200 }}>
-        Captions and reframe were generated for the previous cut. Regenerate to apply the new boundaries.
-      </span>
-      <div style={{ display: "flex", gap: 6 }}>
-        {stale.map((v) => (
-          <button
-            key={v.key}
-            onClick={() => onRegenerate(v.key)}
-            disabled={Boolean(generating)}
-            className="btn btn-sm"
-            style={{
-              background: "var(--bg-elev)",
-              borderColor: "oklch(0.9 0.06 75)",
-              color: "oklch(0.4 0.08 75)",
-            }}
-          >
-            <Icon name="refresh" size={12} />
-            Regenerate {v.key}
-          </button>
-        ))}
       </div>
     </div>
   );

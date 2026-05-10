@@ -45,12 +45,6 @@ export type Settings = {
   libraryReachable: boolean;
 };
 
-// Burned-in captions were dropped from MVP — the major social platforms
-// (TikTok, Douyin, Reels, Shorts) all ship native auto-caption with better
-// styling than we'd produce. Vertical reframe (9:16 instructor tracking) is
-// still planned, hence kept here as a placeholder variant.
-export type ClipVariant = "original" | "reframe";
-
 // One contiguous source-time speech window of a clip. `intervals` is the
 // list of these that the renderer concats and the player skips between —
 // silences longer than the project threshold are simply absent from the
@@ -88,13 +82,11 @@ export type Clip = {
   // pause / filler word / …). Empty for legacy clips — `cutsFromClip`
   // falls back to deriving pause cuts from interval gaps in that case.
   removedCuts?: ClipRemovedCut[];
-  variants: ClipVariant[];
   description: string;
   hashtags: string[];
   hookText: string;
   thumbFrame: number;
   original?: { startSec: number; endSec: number };
-  staleVariants?: ClipVariant[];
   needsRender?: boolean;
 };
 
