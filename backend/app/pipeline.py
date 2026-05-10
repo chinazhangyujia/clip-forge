@@ -746,13 +746,15 @@ async def slice_clip(
 
     Single-interval clips (the common case from a fresh AI proposal) take
     a fast accurate path: input-side ``-ss`` jumps the demuxer to the
-    keyframe before the cut, the libx264 ``ultrafast`` re-encode drops
-    decoded frames before the requested PTS so the output starts on the
-    exact frame the UI shows, and audio is stream-copied to skip the
-    audio re-encode entirely. Faster than the original veryfast+CRF 22 +
-    AAC re-encode (the previous slow path) and frame-accurate, unlike
-    the bare ``-c copy`` shortcut, which snapped to the keyframe before
-    the start and produced clips a few hundred ms longer than requested.
+    keyframe before the cut, then libx264 ``ultrafast`` re-encodes from
+    there while dropping decoded frames before the requested PTS so the
+    output starts on the exact frame the UI shows. Audio is re-encoded
+    to AAC so the audio decoder drops samples before the cut the same
+    way the video decoder does — stream-copying audio here would keep
+    the leading packets between the keyframe and the cut, which timestamp
+    normalization renders as audio with no matching video (a black-screen
+    head). AAC encode is cheap (~1% of the wall time vs. video), so the
+    cost of correctness is negligible.
 
     Multi-interval clips (silence-removed) need real audio crossfades to
     splice the disjoint ranges, so they fall through to a single
@@ -784,9 +786,9 @@ async def slice_clip(
             "-crf",
             "22",
             "-c:a",
-            "copy",
-            "-avoid_negative_ts",
-            "make_zero",
+            "aac",
+            "-b:a",
+            "128k",
             "-movflags",
             "+faststart",
             str(out_path),
