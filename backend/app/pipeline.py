@@ -746,11 +746,14 @@ async def slice_clip(
     """Render a clip from one or more source-time intervals.
 
     Single-interval clips (the common case from a fresh AI proposal) take
-    the stream-copy fast path: ``ffmpeg -ss S -to E -i src -c copy``
-    snaps to the nearest preceding container keyframe and remuxes without
-    decode/encode, finishing in ~1s vs. 30-60s for a libx264 re-encode on
-    slow laptops. The keyframe snap means the cut is accurate to within a
-    GOP (~1-2s for typical recordings); fine for downloads.
+    a fast accurate path: input-side ``-ss`` jumps the demuxer to the
+    keyframe before the cut, the libx264 ``ultrafast`` re-encode drops
+    decoded frames before the requested PTS so the output starts on the
+    exact frame the UI shows, and audio is stream-copied to skip the
+    audio re-encode entirely. Faster than the original veryfast+CRF 22 +
+    AAC re-encode (the previous slow path) and frame-accurate, unlike
+    the bare ``-c copy`` shortcut, which snapped to the keyframe before
+    the start and produced clips a few hundred ms longer than requested.
 
     Multi-interval clips (silence-removed) need real audio crossfades to
     splice the disjoint ranges, so they fall through to a single
@@ -765,16 +768,23 @@ async def slice_clip(
 
     if len(intervals) == 1:
         s, e = intervals[0]
+        duration = max(e - s, 0.0)
         code, _, err = await _run(
             ffmpeg_bin("ffmpeg"),
             "-y",
             "-ss",
             f"{s:.3f}",
-            "-to",
-            f"{e:.3f}",
             "-i",
             str(src_path),
-            "-c",
+            "-t",
+            f"{duration:.3f}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "22",
+            "-c:a",
             "copy",
             "-avoid_negative_ts",
             "make_zero",
@@ -783,7 +793,7 @@ async def slice_clip(
             str(out_path),
         )
         if code != 0:
-            raise RuntimeError(f"ffmpeg slice (copy) failed: {err.strip()[-500:]}")
+            raise RuntimeError(f"ffmpeg slice failed: {err.strip()[-500:]}")
         return out_path
 
     fc = _build_concat_filter(intervals)
