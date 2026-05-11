@@ -32,7 +32,7 @@ class LocalFileDataStore(DataStore):
         for table in ("projects", "clips", "jobs"):
             f = self._path(table)
             if not f.exists():
-                f.write_text("[]")
+                f.write_text("[]", encoding="utf-8")
 
     async def close(self) -> None:
         pass
@@ -41,13 +41,21 @@ class LocalFileDataStore(DataStore):
         return self.db_dir / f"{table}.json"
 
     def _read(self, table: str) -> list[dict[str, Any]]:
-        text = self._path(table).read_text() or "[]"
+        # encoding="utf-8" is load-bearing on Windows: Path.read_text otherwise
+        # uses the platform locale (gbk on Chinese Windows, cp1252 on English),
+        # which silently round-trips fine until project titles or transcripts
+        # contain non-ASCII characters that the locale can't represent —
+        # then writes raise UnicodeEncodeError and reads produce mojibake.
+        text = self._path(table).read_text(encoding="utf-8") or "[]"
         return json.loads(text)
 
     def _write(self, table: str, rows: list[dict[str, Any]]) -> None:
         path = self._path(table)
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(rows, indent=2, ensure_ascii=False))
+        tmp.write_text(
+            json.dumps(rows, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
         tmp.replace(path)
 
     # ---------- projects ----------

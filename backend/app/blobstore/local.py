@@ -43,10 +43,10 @@ class LocalFileBlobStore(BlobStore):
         return total
 
     async def write_text(self, key: str, content: str) -> None:
-        self.local_path(key).write_text(content)
+        self.local_path(key).write_text(content, encoding="utf-8")
 
     async def read_text(self, key: str) -> str:
-        return self._path(key).read_text()
+        return self._path(key).read_text(encoding="utf-8")
 
     async def exists(self, key: str) -> bool:
         return self._path(key).exists()

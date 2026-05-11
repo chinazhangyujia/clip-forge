@@ -22,9 +22,13 @@ from ..schemas import (
 log = logging.getLogger(__name__)
 
 ARTIFACT_MEDIA = {
-    "transcript.json": "application/json",
-    "cuts.json": "application/json",
-    "speech_intervals.json": "application/json",
+    # charset=utf-8 is defensive: the JSON spec already mandates UTF-8 and
+    # browser fetch().json() decodes as UTF-8 regardless, but some HTTP
+    # clients / proxies / antivirus rewrites honor the declared charset.
+    # No reason not to be explicit when the artifacts contain Chinese.
+    "transcript.json": "application/json; charset=utf-8",
+    "cuts.json": "application/json; charset=utf-8",
+    "speech_intervals.json": "application/json; charset=utf-8",
 }
 
 router = APIRouter(prefix="/projects", tags=["projects"])

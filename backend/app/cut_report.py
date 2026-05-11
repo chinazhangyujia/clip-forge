@@ -127,9 +127,9 @@ def build_report(
     if not speech_p.exists() or not transcript_p.exists():
         return []
 
-    speech_data = json.loads(Path(speech_p).read_text())
+    speech_data = json.loads(Path(speech_p).read_text(encoding="utf-8"))
     cuts = silence.deserialize_cuts(speech_data)
-    segments = json.loads(Path(transcript_p).read_text())
+    segments = json.loads(Path(transcript_p).read_text(encoding="utf-8"))
 
     # `clips` is small (≤ a couple hundred); a linear scan per cut is fine.
     out: list[dict] = []

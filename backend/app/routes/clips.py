@@ -78,7 +78,7 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
     removed_cuts: list[dict] = []
     speech_p = pp.speech_intervals_path(project)
     if speech_p.exists():
-        speech_data = json.loads(speech_p.read_text())
+        speech_data = json.loads(speech_p.read_text(encoding="utf-8"))
         mask = silence.deserialize_intervals(speech_data)
         sliced = silence.source_range_to_source_intervals(
             body.start_sec, body.end_sec, mask

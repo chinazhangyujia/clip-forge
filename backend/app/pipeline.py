@@ -467,12 +467,12 @@ async def transcribe(project_id: str) -> list[dict]:
             "[%s] transcript already exists, skipping transcribe (reuse cached)",
             project_id,
         )
-        segments = json.loads(transcript_p.read_text())
+        segments = json.loads(transcript_p.read_text(encoding="utf-8"))
         # Always rebuild the mask + cuts on rerun: filler detection is
         # rule-based, so updating the wordlist or thresholds should take
         # effect by re-running the pipeline (no re-transcribe needed).
         lang = (
-            json.loads(speech_p.read_text()).get("language")
+            json.loads(speech_p.read_text(encoding="utf-8")).get("language")
             if speech_p.exists()
             else None
         ) or _detect_language(segments)
@@ -488,7 +488,8 @@ async def transcribe(project_id: str) -> list[dict]:
                 {**silence.serialize_intervals(ivs, cuts), "language": lang},
                 indent=2,
                 ensure_ascii=False,
-            )
+            ),
+            encoding="utf-8",
         )
         _log_silence_cuts(project_id, segments, ivs, cuts)
         return segments
@@ -498,7 +499,10 @@ async def transcribe(project_id: str) -> list[dict]:
     segments, lang = await asyncio.to_thread(_transcribe_sync, audio_p)
     if lang == "zh":
         _to_simplified_chinese(segments)
-    transcript_p.write_text(json.dumps(segments, indent=2, ensure_ascii=False))
+    transcript_p.write_text(
+        json.dumps(segments, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     ivs, cuts = await _build_speech_mask(
         segments,
         project.source_duration_sec or 0.0,
@@ -511,7 +515,8 @@ async def transcribe(project_id: str) -> list[dict]:
             {**silence.serialize_intervals(ivs, cuts), "language": lang},
             indent=2,
             ensure_ascii=False,
-        )
+        ),
+        encoding="utf-8",
     )
     log.info(
         "[%s] transcribed %d segments, %d speech intervals (compact %.1fs / source %.1fs)",
@@ -574,10 +579,10 @@ async def propose_cuts(
     speech_p = pp.speech_intervals_path(project)
     if not transcript_p.exists():
         raise RuntimeError("Transcript not found; transcribe first")
-    segments = json.loads(transcript_p.read_text())
+    segments = json.loads(transcript_p.read_text(encoding="utf-8"))
 
     if speech_p.exists():
-        speech_data = json.loads(speech_p.read_text())
+        speech_data = json.loads(speech_p.read_text(encoding="utf-8"))
         intervals = silence.deserialize_intervals(speech_data)
         all_removed_cuts = silence.deserialize_cuts(speech_data)
     else:
@@ -591,7 +596,7 @@ async def propose_cuts(
 
     if not intervals:
         # Nothing transcribed — nothing to cut.
-        pp.cuts_path(project).write_text("[]")
+        pp.cuts_path(project).write_text("[]", encoding="utf-8")
         return []
 
     compact_segments = _build_compact_segments(segments, intervals)
@@ -649,7 +654,8 @@ async def propose_cuts(
             ],
             indent=2,
             ensure_ascii=False,
-        )
+        ),
+        encoding="utf-8",
     )
     return proposed
 
