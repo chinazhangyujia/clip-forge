@@ -1,7 +1,8 @@
 name: Build desktop installers
 
 # Triggers:
-#   * push to main → build both Mac and Windows installers, upload as artifacts
+#   * push to main → build the Windows installer, upload as an artifact
+#                    (Mac build disabled; see matrix below)
 #   * tag v* → also attach artifacts to a draft GitHub Release
 #   * workflow_dispatch → manual run from the Actions UI
 on:
@@ -16,14 +17,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            platform: mac
-            # Tauri's macOS bundler produces both *_aarch64.dmg and *_x64.dmg
-            # by default. The Intel one is invalid for us (PyInstaller +
-            # CTranslate2 + ffmpeg are all arm64 binaries), so only ship the
-            # arm64 DMG.
-            artifact_glob: "desktop/src-tauri/target/release/bundle/dmg/*_aarch64.dmg"
-            artifact_name: ClipForge-mac-arm64
+          # macOS build temporarily disabled — current dogfood target is a
+          # Windows tester, and Mac DMGs are buildable locally via
+          # `bash desktop/scripts/build.sh`. Re-enable by uncommenting the
+          # block below (and the matching DMG line in the release job).
+          # - os: macos-latest
+          #   platform: mac
+          #   # Tauri's macOS bundler produces both *_aarch64.dmg and *_x64.dmg
+          #   # by default. The Intel one is invalid for us (PyInstaller +
+          #   # CTranslate2 + ffmpeg are all arm64 binaries), so only ship the
+          #   # arm64 DMG.
+          #   artifact_glob: "desktop/src-tauri/target/release/bundle/dmg/*_aarch64.dmg"
+          #   artifact_name: ClipForge-mac-arm64
           - os: windows-latest
             platform: win
             artifact_glob: "desktop/src-tauri/target/release/bundle/msi/*.msi"
@@ -117,8 +122,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          # Mac DMG line removed while the macOS matrix entry is disabled
+          # in the build job — add it back when re-enabling Mac builds:
+          #   artifacts/ClipForge-mac-arm64/*_aarch64.dmg
           files: |
-            artifacts/ClipForge-mac-arm64/*_aarch64.dmg
             artifacts/ClipForge-win-x64/*.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
