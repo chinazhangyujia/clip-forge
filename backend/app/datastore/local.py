@@ -41,13 +41,43 @@ class LocalFileDataStore(DataStore):
         return self.db_dir / f"{table}.json"
 
     def _read(self, table: str) -> list[dict[str, Any]]:
-        # encoding="utf-8" is load-bearing on Windows: Path.read_text otherwise
-        # uses the platform locale (gbk on Chinese Windows, cp1252 on English),
-        # which silently round-trips fine until project titles or transcripts
-        # contain non-ASCII characters that the locale can't represent —
-        # then writes raise UnicodeEncodeError and reads produce mojibake.
-        text = self._path(table).read_text(encoding="utf-8") or "[]"
-        return json.loads(text)
+        # utf-8-sig (not bare utf-8) so a stray BOM at the start of the file
+        # is stripped on read instead of becoming a literal ﻿ that json
+        # then chokes on at "char 0". A BOM can arrive from Notepad-on-
+        # Windows resaves, antivirus rewrites, or files imported from
+        # external editors — none of which we write, but all of which can
+        # touch the user's data dir.
+        #
+        # encoding handling is otherwise load-bearing on Windows: Path.read_text
+        # without an explicit encoding uses the platform locale (gbk on
+        # Chinese Windows, cp1252 on English), which silently round-trips
+        # fine until project titles or transcripts contain non-ASCII
+        # characters that the locale can't represent — then writes raise
+        # UnicodeEncodeError and reads produce mojibake.
+        path = self._path(table)
+        raw = path.read_text(encoding="utf-8-sig")
+        # `.strip() or "[]"` catches both truly empty and whitespace-only
+        # files. Pre-fix code only checked truthiness, so a file containing
+        # a single newline fell through to `json.loads("\n")` and crashed.
+        text = raw.strip() or "[]"
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            # Self-contained diagnostic: include the path, the parser's
+            # position, and a clipped hex+repr snippet of the actual bytes.
+            # On the desktop bundle this exception bubbles through the
+            # generic exception handler in main.py and lands in the
+            # frontend error modal — without the snippet there's no way
+            # to tell whether the file has a BOM, garbage bytes, or got
+            # truncated.
+            snippet = text[: min(len(text), 200)]
+            byte_preview = path.read_bytes()[:32].hex(" ")
+            raise RuntimeError(
+                f"Datastore table {path.name} at {path} is not valid JSON "
+                f"({e.msg} at line {e.lineno} col {e.colno}). "
+                f"First 32 bytes: {byte_preview}. "
+                f"Decoded prefix: {snippet!r}"
+            ) from e
 
     def _write(self, table: str, rows: list[dict[str, Any]]) -> None:
         path = self._path(table)

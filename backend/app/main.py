@@ -143,6 +143,38 @@ async def detailed_http_exception_handler(request: Request, exc: StarletteHTTPEx
     return await http_exception_handler(request, exc)
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # Anything that isn't an HTTPException (e.g. a route handler raised
+    # RuntimeError, KeyError, JSONDecodeError) defaults to Starlette's
+    # blank "Internal Server Error" response — no body, no detail. That
+    # produces the same dead-end on the desktop bundle as the upload /
+    # download paths used to, since the frontend's diagnostic modal has
+    # nothing to render.
+    #
+    # Mirror the HTTPException-with-cause path: serialize the type, the
+    # one-line message, the full traceback, and an env snapshot into a
+    # 500 JSON body. The frontend formatter already handles this shape.
+    log.exception(
+        "%s %s raised an unhandled %s",
+        request.method, request.url.path, type(exc).__name__,
+    )
+    body: dict[str, object] = {
+        "detail": f"Unhandled server error: {type(exc).__name__}",
+        "method": request.method,
+        "path": request.url.path,
+        "env": _safe_env_snapshot(),
+        "cause_type": type(exc).__name__,
+        "cause": "".join(
+            traceback.format_exception_only(type(exc), exc)
+        ).strip(),
+        "traceback": "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        ).strip(),
+    }
+    return JSONResponse(status_code=500, content=body)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
