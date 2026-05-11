@@ -419,8 +419,13 @@ export const DownloadControl = ({ clip }: { clip: Clip }) => {
       let status = 0;
       let statusText = "Network error";
       let responseText = "";
+      // Set the moment fetch() resolves with headers. Splitting "time to
+      // headers" from "time to body failure" tells us next time whether
+      // the long wait was on the server (ffmpeg) or the wire (stream cut).
+      let headersAt: number | null = null;
       try {
         const res = await fetch(url, { signal: abort.signal });
+        headersAt = Date.now();
         status = res.status;
         statusText = res.statusText;
         if (!res.ok) {
@@ -477,6 +482,7 @@ export const DownloadControl = ({ clip }: { clip: Clip }) => {
           responseText,
           thrown: e,
           startedAt,
+          headersAt,
         });
         setJob((prev) =>
           prev ? { ...prev, phase: "error", error: shortMessage } : prev,

@@ -135,19 +135,33 @@ export function formatDownloadError(args: {
   // The raw thrown value (Error or anything). null if !res.ok path.
   thrown: unknown;
   startedAt: number;
+  // When fetch() resolved with headers (status received). null if headers
+  // never arrived — i.e. the failure was during the render, not the body
+  // stream. Separating render time from stream time pinpoints which side
+  // we need to fix next.
+  headersAt: number | null;
 }): string {
   const {
     url, clipId, clipTitle, projectId,
-    status, statusText, responseText, thrown, startedAt,
+    status, statusText, responseText, thrown, startedAt, headersAt,
   } = args;
   const elapsedMs = Date.now() - startedAt;
+  // Decompose the timeline. If headersAt is set we know exactly how long
+  // the server held the request before replying (≈ render time) vs how
+  // long the body transfer took before it died.
+  const timingLines = headersAt !== null
+    ? [
+        `Time to headers:  ${headersAt - startedAt}ms (≈ server render time)`,
+        `Time after headers: ${Date.now() - headersAt}ms (body stream before failure)`,
+      ]
+    : [`Time to failure:  ${elapsedMs}ms (no headers received)`];
   const lines = [
     "ClipForge — download failed",
     `URL:         ${url}`,
     `Status:      ${status === 0 ? "(no response — network error)" : `${status} ${statusText}`}`,
     `Clip:        ${clipTitle} (${clipId})`,
     `Project:     ${projectId}`,
-    `Elapsed:     ${elapsedMs}ms`,
+    ...timingLines,
     `Started at:  ${new Date(startedAt).toISOString()}`,
     `Now:         ${new Date().toISOString()}`,
     `User agent:  ${typeof navigator !== "undefined" ? navigator.userAgent : "(server)"}`,
