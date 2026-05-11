@@ -3,8 +3,167 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon, Spinner } from "@/lib/icons";
 import { useStore } from "@/lib/store";
-import { api } from "@/lib/api";
+import { api, formatDownloadError } from "@/lib/api";
 import type { Clip } from "@/lib/types";
+
+// Best-effort clipboard write. navigator.clipboard.writeText is available in
+// the Tauri WebView (Edge WebView2 on Windows, WKWebView on Mac), but it can
+// reject when the document isn't focused — e.g. user just clicked away. We
+// resolve a boolean so the caller can fall back to manual select-and-copy
+// from the modal textarea instead of swallowing the failure.
+async function tryCopyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through.
+  }
+  return false;
+}
+
+type ErrorModalProps = {
+  details: string;
+  onClose: () => void;
+};
+
+// Fixed-position dialog over the page. Shown when the user clicks "Copy error
+// details" on the failure toast. The friend reported the existing failure
+// message ("Failed to fetch") was unactionable — this dialog puts a fully
+// selectable, copy-button-backed diagnostic block one click away.
+const ErrorDetailsModal = ({ details, onClose }: ErrorModalProps) => {
+  const textRef = useRef<HTMLTextAreaElement | null>(null);
+  const [copiedAt, setCopiedAt] = useState<number | null>(null);
+
+  // Auto-select the text once the modal opens so the user can Ctrl+C even
+  // if the Copy button fails. React 19 doesn't allow side effects in render,
+  // so route through an effect on mount.
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, []);
+
+  const handleCopy = useCallback(() => {
+    void tryCopyToClipboard(details).then((ok) => {
+      if (ok) {
+        setCopiedAt(Date.now());
+        return;
+      }
+      // Manual fallback — re-select so a Ctrl+C completes the copy.
+      const el = textRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    });
+  }, [details]);
+
+  // Close on Escape for keyboard users.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="dl-error-title"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "oklch(0 0 0 / 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 100,
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          padding: 20,
+          width: "min(720px, 100%)",
+          maxHeight: "min(80vh, 720px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          boxShadow: "0 12px 40px oklch(0 0 0 / 0.18)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ color: "var(--red)", display: "inline-flex" }}>
+            <Icon name="alert" size={18} />
+          </span>
+          <div id="dl-error-title" style={{ fontWeight: 600, fontSize: 15 }}>
+            Download error details
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="btn-ghost btn-sm btn-icon"
+            style={{ marginLeft: "auto", height: 28, width: 28 }}
+          >
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+        <div style={{ fontSize: 13, color: "var(--fg-muted)" }}>
+          Send this whole block back to whoever set you up. It contains
+          everything they need to diagnose the failure.
+        </div>
+        <textarea
+          ref={textRef}
+          readOnly
+          value={details}
+          spellCheck={false}
+          style={{
+            flex: 1,
+            minHeight: 220,
+            fontFamily: "var(--font-mono, ui-monospace, monospace)",
+            fontSize: 12,
+            lineHeight: 1.45,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "var(--bg-subtle, oklch(0.97 0.005 250))",
+            color: "var(--fg)",
+            resize: "vertical",
+            whiteSpace: "pre",
+            overflow: "auto",
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={handleCopy} className="btn btn-primary">
+            {copiedAt ? "Copied!" : "Copy to clipboard"}
+          </button>
+          <button onClick={onClose} className="btn">
+            Close
+          </button>
+          <div
+            style={{
+              marginLeft: "auto",
+              fontSize: 12,
+              color: "var(--fg-faint)",
+            }}
+          >
+            Or press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>Ctrl</kbd>+<kbd>C</kbd>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 type Phase = "encoding" | "saving" | "done" | "error";
 
@@ -204,6 +363,9 @@ export const DownloadControl = ({ clip }: { clip: Clip }) => {
   const { pushToast, addJob, removeJob } = useStore();
   const [job, setJob] = useState<DownloadJob | null>(null);
   const [stuck, setStuck] = useState(false);
+  // Set when a download fails; shown as a modal so the friend can copy a
+  // full diagnostic block (URL, status, response body, JS stack, env).
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
   // Tracker: when the active job's id changes, reset `stuck` during render
   // (rather than in an effect, which the React 19 lint forbids).
   const [stuckTrackedJobId, setStuckTrackedJobId] = useState<string | null>(null);
@@ -222,11 +384,6 @@ export const DownloadControl = ({ clip }: { clip: Clip }) => {
   }, [job]);
 
   const safeName = clip.title.replace(/[/\\]/g, "-");
-
-  // Held by ref so the failure-toast's Retry action can re-invoke the latest
-  // `start` without `start` having to close over itself (which would create a
-  // forward-reference cycle).
-  const startRef = useRef<() => void>(() => {});
 
   const start = useCallback(() => {
     if (job) return; // duplicate-click guard
@@ -253,12 +410,28 @@ export const DownloadControl = ({ clip }: { clip: Clip }) => {
 
     const url = api.clipDownloadUrl(clip.id);
     const filename = `${safeName}.mp4`;
+    const startedAt = Date.now();
 
     (async () => {
+      // Status info we need to format the diagnostic block on failure. Built
+      // up as the fetch progresses; tracked outside the try so the catch can
+      // see whatever we managed to capture.
+      let status = 0;
+      let statusText = "Network error";
+      let responseText = "";
       try {
         const res = await fetch(url, { signal: abort.signal });
+        status = res.status;
+        statusText = res.statusText;
         if (!res.ok) {
-          throw new Error(`Server returned ${res.status}`);
+          // Read the body BEFORE throwing so the catch block has the
+          // backend's structured detail (cause/traceback) to render.
+          try {
+            responseText = await res.text();
+          } catch {
+            /* body read can itself fail mid-stream — that's fine. */
+          }
+          throw new Error(`Server returned ${status} ${statusText}`);
         }
         // Move chip into "Saving…" while we materialize the blob.
         setJob((prev) => (prev ? { ...prev, phase: "saving" } : prev));
@@ -290,33 +463,46 @@ export const DownloadControl = ({ clip }: { clip: Clip }) => {
         if (abort.signal.aborted) {
           return;
         }
-        const message = e instanceof Error ? e.message : String(e);
+        const shortMessage = e instanceof Error ? e.message : String(e);
+        // Self-contained diagnostic block. The desktop user is non-technical;
+        // the goal is one paste-able blob with everything we'd want for triage
+        // (URL, response body if any, JS error stack, user agent, timing).
+        const details = formatDownloadError({
+          url,
+          clipId: clip.id,
+          clipTitle: clip.title,
+          projectId: clip.projectId,
+          status,
+          statusText,
+          responseText,
+          thrown: e,
+          startedAt,
+        });
         setJob((prev) =>
-          prev ? { ...prev, phase: "error", error: message } : prev,
+          prev ? { ...prev, phase: "error", error: shortMessage } : prev,
         );
         window.setTimeout(() => {
           setJob(null);
           removeJob(jobId);
         }, 800);
+        // Open the error modal eagerly so the diagnostic block is in front
+        // of the user immediately, and pre-copy to clipboard so the friend
+        // can paste back without an extra click. The toast is a secondary
+        // notification — the modal is the real UI for this failure mode.
+        setErrorDetails(details);
+        void tryCopyToClipboard(details);
         pushToast({
           kind: "error",
           title: "Download failed",
-          body: message,
-          duration: 6000,
+          body: shortMessage,
           action: {
-            label: "Retry",
-            onClick: () => startRef.current(),
+            label: "Show error details",
+            onClick: () => setErrorDetails(details),
           },
         });
       }
     })();
   }, [clip, job, safeName, addJob, removeJob, pushToast]);
-
-  // Keep the ref pointed at the latest `start`. React 19 disallows ref writes
-  // during render, so route through a passive effect.
-  useEffect(() => {
-    startRef.current = start;
-  });
 
   const cancel = useCallback(() => {
     if (!job) return;
@@ -326,14 +512,30 @@ export const DownloadControl = ({ clip }: { clip: Clip }) => {
     pushToast({ kind: "info", title: "Download cancelled", duration: 3000 });
   }, [job, removeJob, pushToast]);
 
+  const modal =
+    errorDetails !== null ? (
+      <ErrorDetailsModal
+        details={errorDetails}
+        onClose={() => setErrorDetails(null)}
+      />
+    ) : null;
+
   if (job) {
-    return <DownloadChip job={job} onCancel={cancel} stuck={stuck} />;
+    return (
+      <>
+        <DownloadChip job={job} onCancel={cancel} stuck={stuck} />
+        {modal}
+      </>
+    );
   }
 
   return (
-    <button className="btn btn-primary" onClick={start}>
-      <Icon name="download" size={14} />
-      Download
-    </button>
+    <>
+      <button className="btn btn-primary" onClick={start}>
+        <Icon name="download" size={14} />
+        Download
+      </button>
+      {modal}
+    </>
   );
 };

@@ -46,32 +46,24 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// Build a self-contained diagnostic block for the project-upload failure flow.
-// The desktop user is non-technical — the goal is one clean blob they can
-// copy and paste back to us. Everything load-bearing for debugging
-// (URL the WebView called, file metadata, server-side __cause__ if the
-// backend exception handler unwrapped it) goes into this block.
-function formatUploadError(args: {
-  url: string;
-  status: number;
-  statusText: string;
-  responseText: string;
-  file: File;
-  library?: string;
-}): string {
-  const { url, status, statusText, responseText, file, library } = args;
+type BackendErrorBody = {
+  detail?: string;
+  cause?: string;
+  cause_type?: string | null;
+  traceback?: string;
+  env?: Record<string, unknown>;
+};
+
+// Shared formatter for the server-side portion of a diagnostic block: the
+// structured fields the backend exception handler attaches (detail, cause,
+// traceback, env). Used by both the upload and download failure flows.
+function appendServerDetail(lines: string[], responseText: string): void {
   let serverDetail = responseText || "(empty body)";
   let causeBlock = "";
   let tracebackBlock = "";
   let envBlock = "";
   try {
-    const parsed = JSON.parse(responseText) as {
-      detail?: string;
-      cause?: string;
-      cause_type?: string | null;
-      traceback?: string;
-      env?: Record<string, unknown>;
-    };
+    const parsed = JSON.parse(responseText) as BackendErrorBody;
     if (parsed.detail) serverDetail = parsed.detail;
     if (parsed.cause) {
       causeBlock = `\nUnderlying cause${
@@ -90,6 +82,26 @@ function formatUploadError(args: {
   } catch {
     // Body wasn't JSON — fall back to the raw text.
   }
+  lines.push("", "Server detail:", serverDetail);
+  if (causeBlock) lines.push(causeBlock);
+  if (tracebackBlock) lines.push(tracebackBlock);
+  if (envBlock) lines.push(envBlock);
+}
+
+// Build a self-contained diagnostic block for the project-upload failure flow.
+// The desktop user is non-technical — the goal is one clean blob they can
+// copy and paste back to us. Everything load-bearing for debugging
+// (URL the WebView called, file metadata, server-side __cause__ if the
+// backend exception handler unwrapped it) goes into this block.
+function formatUploadError(args: {
+  url: string;
+  status: number;
+  statusText: string;
+  responseText: string;
+  file: File;
+  library?: string;
+}): string {
+  const { url, status, statusText, responseText, file, library } = args;
   const lines = [
     "ClipForge — upload failed",
     `URL:        ${url}`,
@@ -99,13 +111,64 @@ function formatUploadError(args: {
     `Type:       ${file.type || "(unknown)"}`,
     library ? `Library:    ${library}` : "Library:    (default workspace)",
     `User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "(server)"}`,
-    "",
-    "Server detail:",
-    serverDetail,
   ];
-  if (causeBlock) lines.push(causeBlock);
-  if (tracebackBlock) lines.push(tracebackBlock);
-  if (envBlock) lines.push(envBlock);
+  appendServerDetail(lines, responseText);
+  return lines.join("\n");
+}
+
+// Same idea for the per-clip Download flow. The MP4 download path is
+// distinct from the project upload — server renders on demand via ffmpeg,
+// which on Windows can fail in flavors the user can't translate ("Failed
+// to fetch" with no stack). When fetch() rejects we have no response, only
+// the JS-side error; when the server returns non-2xx we also get the
+// structured backend body (detail / cause / traceback / env).
+export function formatDownloadError(args: {
+  url: string;
+  clipId: string;
+  clipTitle: string;
+  projectId: string;
+  // Set when the server replied with a non-2xx; null/0 if fetch() rejected
+  // before a response (network error / connection reset / WebView issue).
+  status: number;
+  statusText: string;
+  responseText: string;
+  // The raw thrown value (Error or anything). null if !res.ok path.
+  thrown: unknown;
+  startedAt: number;
+}): string {
+  const {
+    url, clipId, clipTitle, projectId,
+    status, statusText, responseText, thrown, startedAt,
+  } = args;
+  const elapsedMs = Date.now() - startedAt;
+  const lines = [
+    "ClipForge — download failed",
+    `URL:         ${url}`,
+    `Status:      ${status === 0 ? "(no response — network error)" : `${status} ${statusText}`}`,
+    `Clip:        ${clipTitle} (${clipId})`,
+    `Project:     ${projectId}`,
+    `Elapsed:     ${elapsedMs}ms`,
+    `Started at:  ${new Date(startedAt).toISOString()}`,
+    `Now:         ${new Date().toISOString()}`,
+    `User agent:  ${typeof navigator !== "undefined" ? navigator.userAgent : "(server)"}`,
+    `Online:      ${typeof navigator !== "undefined" ? navigator.onLine : "(unknown)"}`,
+  ];
+  if (thrown !== null && thrown !== undefined) {
+    if (thrown instanceof Error) {
+      lines.push("", `Client error: ${thrown.name}: ${thrown.message}`);
+      if (thrown.stack) lines.push("Stack:", thrown.stack);
+      // Chrome/WebView2 sometimes hangs an underlying cause off `.cause`.
+      const cause = (thrown as Error & { cause?: unknown }).cause;
+      if (cause !== undefined) {
+        lines.push("Cause:", cause instanceof Error
+          ? `${cause.name}: ${cause.message}`
+          : String(cause));
+      }
+    } else {
+      lines.push("", `Client error: ${String(thrown)}`);
+    }
+  }
+  if (responseText) appendServerDetail(lines, responseText);
   return lines.join("\n");
 }
 

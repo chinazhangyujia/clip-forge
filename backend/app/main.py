@@ -99,22 +99,28 @@ async def detailed_http_exception_handler(request: Request, exc: StarletteHTTPEx
     # collapse into the same opaque message. Surface the chained __cause__,
     # the full traceback, and an env snapshot so a non-technical user can
     # copy-paste one block and we can diagnose without another round-trip.
+    #
+    # We do the same thing for any HTTPException with a chained `__cause__`
+    # (i.e. `raise HTTPException(...) from e`) — the download route raises
+    # `from e` when ffmpeg fails, and the user otherwise sees a bare
+    # "Failed to fetch" on Windows with no way to know what went wrong.
     is_body_parse_400 = (
         exc.status_code == 400
         and exc.detail == "There was an error parsing the body"
     )
-    if is_body_parse_400:
-        cause = exc.__cause__
+    cause = exc.__cause__
+    if is_body_parse_400 or cause is not None:
         body: dict[str, object] = {
-            "detail": "There was an error parsing the body",
+            "detail": exc.detail,
             "method": request.method,
             "path": request.url.path,
             "env": _safe_env_snapshot(),
         }
         if cause is not None:
             log.exception(
-                "Body parse failed for %s %s — cause: %s: %s",
-                request.method, request.url.path, type(cause).__name__, cause,
+                "%s %s failed with status %d — cause: %s: %s",
+                request.method, request.url.path, exc.status_code,
+                type(cause).__name__, cause,
             )
             body["cause_type"] = type(cause).__name__
             body["cause"] = "".join(
@@ -128,12 +134,12 @@ async def detailed_http_exception_handler(request: Request, exc: StarletteHTTPEx
             ).strip()
         else:
             log.error(
-                "Body parse failed for %s %s — no chained __cause__ attached",
-                request.method, request.url.path,
+                "%s %s failed with status %d — no chained __cause__ attached",
+                request.method, request.url.path, exc.status_code,
             )
             body["cause_type"] = None
             body["cause"] = "(no underlying exception was attached)"
-        return JSONResponse(status_code=400, content=body)
+        return JSONResponse(status_code=exc.status_code, content=body)
     return await http_exception_handler(request, exc)
 
 
