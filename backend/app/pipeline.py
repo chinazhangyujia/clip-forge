@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -743,6 +744,59 @@ def _build_concat_filter(intervals: list[tuple[float, float]]) -> str:
         prev_label = out_label
 
     return ";".join(parts)
+
+
+# Per-clip lock for slice rendering. Both the on-demand download endpoint
+# and the background worker may call into ensure_clip_rendered for the
+# same clip; without a shared lock they'd both kick off ffmpeg and race
+# on the output path. The dict is bounded by the number of distinct clips
+# touched in this process — small for a desktop app.
+_render_locks: dict[str, asyncio.Lock] = {}
+_render_locks_guard = asyncio.Lock()
+
+
+async def _get_render_lock(clip_id: str) -> asyncio.Lock:
+    async with _render_locks_guard:
+        lock = _render_locks.get(clip_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _render_locks[clip_id] = lock
+        return lock
+
+
+async def ensure_clip_rendered(project_id: str, clip_id: str) -> Path:
+    """Idempotent render: if the clip file is already up-to-date, return
+    its path immediately; otherwise acquire the per-clip lock, render
+    via slice_clip, mark needs_render=False, then return the path.
+
+    Safe to call concurrently for the same clip_id from any number of
+    callers — only one ffmpeg runs and the others wait then no-op."""
+    ds = get_datastore()
+    row = await ds.get_clip(clip_id)
+    if row is None:
+        raise RuntimeError(f"Clip {clip_id} not found")
+    project = await _get_project(project_id)
+    path = pp.clip_path(project, clip_id)
+    if not row.needs_render and path.exists():
+        return path
+    lock = await _get_render_lock(clip_id)
+    async with lock:
+        # Re-check under the lock — a peer call may have just rendered
+        # this clip while we waited.
+        row = await ds.get_clip(clip_id)
+        if row is None:
+            raise RuntimeError(f"Clip {clip_id} deleted during render")
+        if not row.needs_render and path.exists():
+            return path
+        intervals = [(iv.start_sec, iv.end_sec) for iv in row.intervals] or [
+            (row.start_sec, row.end_sec)
+        ]
+        await slice_clip(row.project_id, clip_id, intervals)
+        await ds.update_clip(
+            clip_id,
+            {"needs_render": False, "updated_at": int(time.time() * 1000)},
+        )
+        return path
 
 
 async def slice_clip(

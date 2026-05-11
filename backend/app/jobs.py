@@ -166,35 +166,38 @@ async def _run_pipeline(project_id: str) -> None:
     )
     await _set_stage(project_id, "cut", "done")
 
-    # Render and package no longer do work in the eager pipeline. Clip
-    # files are produced on demand the first time a consumer needs them
-    # (download) — the source video plus the cut bounds is sufficient for
-    # in-browser review and trim. We still mark the stages "done" so the
-    # UI's PipelineCard reads cleanly; no actual ffmpeg or packaging work
-    # runs here. See routes/clips.py:download_clip for the on-demand
-    # render path.
+    # Mark render/package stages done in the DB so the UI's PipelineCard
+    # transitions cleanly. We don't render inline here — the project page
+    # is interactive once the cut stage is done and the user shouldn't
+    # have to wait for ffmpeg to be able to scrub clips.
     await _set_stage(project_id, "render", "done")
     await _set_stage(project_id, "package", "done")
     await _set_status(project_id, "Ready")
     log.info(
-        "[%s] PIPELINE DONE (%.1fs total) — clips render lazily on first download",
-        project_id, monotonic() - pipeline_t0,
+        "[%s] PIPELINE DONE (%.1fs total) — enqueueing %d clip renders",
+        project_id, monotonic() - pipeline_t0, len(clip_rows),
     )
+    # Eagerly enqueue per-clip render jobs. The worker is sequential, so
+    # these will run one after another, but they kick off immediately
+    # after this pipeline job completes — by the time the user opens a
+    # clip and hits Download, the file is very likely already on disk.
+    # That matters on Windows in particular, where letting the HTTP
+    # request idle for tens of seconds while ffmpeg ran was getting the
+    # connection cut by the OS/WebView2. ensure_clip_rendered is
+    # idempotent so even if the user mashes Download before a render
+    # job runs, we don't double up.
+    for clip in clip_rows:
+        await enqueue_render_clip(project_id, clip.id)
 
 
 # ---------- render-clip job ----------
 
 
 async def _run_render_clip(project_id: str, clip_id: str) -> None:
-    ds = get_datastore()
-    clip = await ds.get_clip(clip_id)
-    if clip is None:
-        raise RuntimeError(f"Clip {clip_id} not found")
-    intervals = [(iv.start_sec, iv.end_sec) for iv in clip.intervals] or [
-        (clip.start_sec, clip.end_sec)
-    ]
-    await pipeline.slice_clip(project_id, clip_id, intervals)
-    await ds.update_clip(clip_id, {"needs_render": False, "updated_at": _now_ms()})
+    # Go through the shared ensure_clip_rendered helper so this job and a
+    # concurrent download-endpoint call serialize through the same lock and
+    # skip ffmpeg entirely if the clip is already up to date.
+    await pipeline.ensure_clip_rendered(project_id, clip_id)
 
 
 # ---------- worker loop ----------

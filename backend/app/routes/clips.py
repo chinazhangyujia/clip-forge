@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from .. import _project_paths as pp
-from .. import pipeline, silence
+from .. import jobs, pipeline, silence
 from ..datastore import get_datastore
 from ..schemas import Clip, ClipUpdate, clip_row_to_dto
 
@@ -16,23 +16,6 @@ router = APIRouter(prefix="/clips", tags=["clips"])
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
-
-
-# Per-clip render locks for the on-demand download path. Without this,
-# a user mashing the Download button on a slow render spawns a fresh
-# ffmpeg per click and pegs CPU/disk. The dict is bounded by the number
-# of distinct clips downloaded in this process — small for a desktop app.
-_render_locks: dict[str, asyncio.Lock] = {}
-_render_locks_guard = asyncio.Lock()
-
-
-async def _get_render_lock(clip_id: str) -> asyncio.Lock:
-    async with _render_locks_guard:
-        lock = _render_locks.get(clip_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            _render_locks[clip_id] = lock
-        return lock
 
 
 async def _watch_disconnect(request: Request) -> None:
@@ -118,9 +101,11 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
         },
     )
     assert updated is not None
-    # No render job enqueued here. The clip file (if it exists from a prior
-    # download) is now stale; the next download will re-render with the new
-    # bounds. In-browser review uses the source video + bounds directly.
+    # Kick off a background render with the new bounds so the user's
+    # next Download click is fast. In-browser review still uses the
+    # source + bounds directly and doesn't wait on this. Idempotent
+    # via ensure_clip_rendered's lock so concurrent edits don't race.
+    await jobs.enqueue_render_clip(updated.project_id, clip_id)
     return clip_row_to_dto(updated)
 
 
@@ -130,53 +115,36 @@ async def download_clip(clip_id: str, request: Request) -> FileResponse:
     row = await ds.get_clip(clip_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
-    project = await ds.get_project(row.project_id)
-    if project is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
-    path = pp.clip_path(project, clip_id)
-
-    if row.needs_render or not path.exists():
-        lock = await _get_render_lock(clip_id)
-        async with lock:
-            row = await ds.get_clip(clip_id)
-            if row is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
-            if row.needs_render or not path.exists():
-                intervals = [(iv.start_sec, iv.end_sec) for iv in row.intervals] or [
-                    (row.start_sec, row.end_sec)
-                ]
-                # Race the render against a disconnect watcher so a closed
-                # tab cancels ffmpeg instead of leaving it pinned to the
-                # CPU producing output nobody is waiting for.
-                render_task = asyncio.create_task(
-                    pipeline.slice_clip(row.project_id, clip_id, intervals)
-                )
-                disconnect_task = asyncio.create_task(_watch_disconnect(request))
-                done, pending = await asyncio.wait(
-                    {render_task, disconnect_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for t in pending:
-                    t.cancel()
-                    with contextlib.suppress(BaseException):
-                        await t
-                if render_task in done:
-                    try:
-                        render_task.result()
-                    except Exception as e:
-                        raise HTTPException(
-                            status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            f"Failed to render clip: {e}",
-                        ) from e
-                    await ds.update_clip(
-                        clip_id, {"needs_render": False, "updated_at": _now_ms()}
-                    )
-                else:
-                    # Client disconnected; render was cancelled. The
-                    # response will never reach the client but we still
-                    # need a status to terminate the route cleanly.
-                    raise HTTPException(499, "Client disconnected")
+    # Race ensure_clip_rendered against a disconnect watcher so a closed
+    # tab cancels ffmpeg instead of leaving it pinned to the CPU producing
+    # output nobody is waiting for. The render is idempotent and shares
+    # its lock with the worker — so even if the user already pre-rendered
+    # via _run_pipeline / update_clip_bounds, this just no-ops.
+    render_task = asyncio.create_task(
+        pipeline.ensure_clip_rendered(row.project_id, clip_id)
+    )
+    disconnect_task = asyncio.create_task(_watch_disconnect(request))
+    done, pending = await asyncio.wait(
+        {render_task, disconnect_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for t in pending:
+        t.cancel()
+        with contextlib.suppress(BaseException):
+            await t
+    if render_task not in done:
+        # Client disconnected; render was cancelled. The response will
+        # never reach the client but we still need a status to terminate
+        # the route cleanly.
+        raise HTTPException(499, "Client disconnected")
+    try:
+        path = render_task.result()
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Failed to render clip: {e}",
+        ) from e
 
     safe_title = (row.title or clip_id).replace("/", "-").replace("\\", "-")
     return FileResponse(
