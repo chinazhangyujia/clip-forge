@@ -167,27 +167,20 @@ async def _run_pipeline(project_id: str) -> None:
     await _set_stage(project_id, "cut", "done")
 
     # Mark render/package stages done in the DB so the UI's PipelineCard
-    # transitions cleanly. We don't render inline here — the project page
-    # is interactive once the cut stage is done and the user shouldn't
-    # have to wait for ffmpeg to be able to scrub clips.
+    # transitions cleanly. Actual ffmpeg slicing is deferred to the moment
+    # the user clicks Download for a specific clip — pre-rendering all
+    # clips up front does not scale to MVP-sized projects (5h source,
+    # ~300 clips) where it would mean hours of background CPU and
+    # gigabytes of disk for clips the user may never download. Single-
+    # interval clips will also stream-copy on download (no encode), so
+    # the deferred work is cheap for most clips anyway.
     await _set_stage(project_id, "render", "done")
     await _set_stage(project_id, "package", "done")
     await _set_status(project_id, "Ready")
     log.info(
-        "[%s] PIPELINE DONE (%.1fs total) — enqueueing %d clip renders",
-        project_id, monotonic() - pipeline_t0, len(clip_rows),
+        "[%s] PIPELINE DONE (%.1fs total) — clips render lazily on first download",
+        project_id, monotonic() - pipeline_t0,
     )
-    # Eagerly enqueue per-clip render jobs. The worker is sequential, so
-    # these will run one after another, but they kick off immediately
-    # after this pipeline job completes — by the time the user opens a
-    # clip and hits Download, the file is very likely already on disk.
-    # That matters on Windows in particular, where letting the HTTP
-    # request idle for tens of seconds while ffmpeg ran was getting the
-    # connection cut by the OS/WebView2. ensure_clip_rendered is
-    # idempotent so even if the user mashes Download before a render
-    # job runs, we don't double up.
-    for clip in clip_rows:
-        await enqueue_render_clip(project_id, clip.id)
 
 
 # ---------- render-clip job ----------

@@ -804,21 +804,22 @@ async def slice_clip(
 ) -> Path:
     """Render a clip from one or more source-time intervals.
 
-    Single-interval clips (the common case from a fresh AI proposal) take
-    a fast accurate path: input-side ``-ss`` jumps the demuxer to the
-    keyframe before the cut, then libx264 ``ultrafast`` re-encodes from
-    there while dropping decoded frames before the requested PTS so the
-    output starts on the exact frame the UI shows. Audio is re-encoded
-    to AAC so the audio decoder drops samples before the cut the same
-    way the video decoder does — stream-copying audio here would keep
-    the leading packets between the keyframe and the cut, which timestamp
-    normalization renders as audio with no matching video (a black-screen
-    head). AAC encode is cheap (~1% of the wall time vs. video), so the
-    cost of correctness is negligible.
+    Single-interval clips take a stream-copy fast path: input-side
+    ``-ss`` seeks the demuxer to the keyframe before the requested cut,
+    then ``-c copy`` muxes the existing packets into a new mp4 without
+    re-encoding. Wall time is dominated by I/O, not CPU — typically
+    well under a second for a one-minute clip — which is essential at
+    MVP scale (5h source / hundreds of clips, all rendered on demand
+    when the user clicks Download). The trade-off: the output starts at
+    the keyframe before the requested time, so the head can be up to a
+    GOP off (often 1-5s for typical encoder defaults). Re-encoding for
+    frame-accuracy is too expensive at this scale to justify for every
+    download.
 
-    Multi-interval clips (silence-removed) need real audio crossfades to
-    splice the disjoint ranges, so they fall through to a single
-    re-encode pass via filter_complex."""
+    Multi-interval clips (silence-removed) cannot stream-copy: splicing
+    disjoint ranges needs real audio crossfades. They fall through to a
+    single re-encode pass via filter_complex; the user accepts the cost
+    here because that clip type is opt-in via the auto-cut feature."""
     if not intervals:
         raise RuntimeError(f"slice_clip {clip_id}: no intervals provided")
     project = await _get_project(project_id)
@@ -830,6 +831,37 @@ async def slice_clip(
     if len(intervals) == 1:
         s, e = intervals[0]
         duration = max(e - s, 0.0)
+        # Stream-copy: muxes existing packets through, no decode/encode.
+        # `-avoid_negative_ts make_zero` normalizes timestamps so players
+        # start at t=0; `+faststart` moves moov to the front so the file
+        # plays/scrubs immediately without reading the whole tail first.
+        code, _, err = await _run(
+            ffmpeg_bin("ffmpeg"),
+            "-y",
+            "-ss",
+            f"{s:.3f}",
+            "-i",
+            str(src_path),
+            "-t",
+            f"{duration:.3f}",
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-movflags",
+            "+faststart",
+            str(out_path),
+        )
+        if code == 0:
+            return out_path
+        # Stream-copy can fail when the source codec doesn't remux cleanly
+        # into mp4 (e.g. HEVC-in-MKV with no hvcC metadata, opus audio,
+        # weird timestamps). Fall back to a re-encode so the user still
+        # gets the clip — slower but works on any input ffmpeg can decode.
+        log.warning(
+            "[%s] slice_clip stream-copy failed (%s); falling back to re-encode",
+            clip_id, err.strip()[-200:],
+        )
         code, _, err = await _run(
             ffmpeg_bin("ffmpeg"),
             "-y",

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from .. import _project_paths as pp
-from .. import jobs, pipeline, silence
+from .. import pipeline, silence
 from ..datastore import get_datastore
 from ..schemas import Clip, ClipUpdate, clip_row_to_dto
 
@@ -101,11 +101,10 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
         },
     )
     assert updated is not None
-    # Kick off a background render with the new bounds so the user's
-    # next Download click is fast. In-browser review still uses the
-    # source + bounds directly and doesn't wait on this. Idempotent
-    # via ensure_clip_rendered's lock so concurrent edits don't race.
-    await jobs.enqueue_render_clip(updated.project_id, clip_id)
+    # Render is deferred to the next Download click. We don't enqueue a
+    # background render here because at MVP scale the user may trim many
+    # clips before downloading any, and pre-rendering them all would
+    # queue hours of ffmpeg work for clips that may never be downloaded.
     return clip_row_to_dto(updated)
 
 
