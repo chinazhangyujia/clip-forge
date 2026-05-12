@@ -1,419 +1,145 @@
-/* global React, ReactDOM, Icon, Spinner, DownloadChip, StoreProvider, useStore, DesignCanvas, DCSection, DCArtboard */
+/* global React, ReactDOM, Icon, Spinner, StoreProvider, DesignCanvas, DCSection, DCArtboard,
+   UnrenderedState, RenderingState, ReadyState, StaleState, PathRow, REVEAL_LABEL, FILE_MANAGER */
 const { useState, useEffect, useMemo } = React;
 
-/* ---------- Static chip — for the states board (no manager) ---------- */
-const StaticChip = ({ phase = 'encoding', progress = 32, stuck = false, hover = false }) => {
-  const isDone = phase === 'done';
-  const isError = phase === 'error';
+/* ----------------------------------------------------------------------------
+   Design canvas for the new file-on-disk affordance on Clip Detail.
+   The old "Download" button has been replaced — ClipForge is a desktop app and
+   the clip mp4 lives in the user's project working directory. The action
+   surface now treats the clip as a file: prepare it, reveal it in the OS file manager.
+---------------------------------------------------------------------------- */
 
-  const label = isDone ? 'Done'
-    : isError ? 'Failed'
-    : progress < 2 ? 'Starting…'
-    : phase === 'saving' ? 'Saving…'
-    : 'Encoding…';
+const SAMPLE_PATH = '~/ClipForge/Course Module 4 — Hooks That Convert/clips/Three words that 100x\'d my views.mp4';
+const SAMPLE_PATH_LONG = '~/ClipForge/AI 时代，语言是最新编程语言/clips/AI 时代，语言是最新编程语言 — opening hook (4_00–4_34).mp4';
 
-  const fillBg = isDone ? 'oklch(0.96 0.05 155)'
-    : isError ? 'oklch(0.97 0.04 25)'
-    : 'var(--accent-soft)';
-
-  const borderC = isDone ? 'oklch(0.85 0.08 155)'
-    : isError ? 'oklch(0.88 0.08 25)'
-    : 'oklch(0.88 0.08 50)';
-
-  const accent = isDone ? 'var(--green)'
-    : isError ? 'var(--red)'
-    : 'var(--accent)';
-
-  return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
-      <div style={{
-        height: 36,
-        minWidth: 156,
-        padding: '0 4px 0 12px',
-        borderRadius: 'var(--radius)',
-        border: `1px solid ${borderC}`,
-        background: fillBg,
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 10,
-        position: 'relative',
-        overflow: 'hidden',
-      }}>
-        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', borderRadius: 'inherit' }}>
-          <div style={{
-            position: 'absolute',
-            left: 0, top: 0, bottom: 0,
-            width: isDone || isError ? '100%' : `${Math.max(2, progress)}%`,
-            background: isDone ? 'oklch(0.93 0.08 155)'
-              : isError ? 'oklch(0.94 0.06 25)'
-              : 'oklch(0.93 0.06 65)',
-          }}/>
-          {!isDone && !isError && progress < 2 && (
-            <div style={{
-              position: 'absolute', inset: 0,
-              background: 'linear-gradient(90deg, transparent 0%, oklch(1 0 0 / 0.5) 50%, transparent 100%)',
-              animation: 'chipShimmer 1.4s ease-in-out infinite',
-            }}/>
-          )}
-        </div>
-
-        <span style={{ position: 'relative', zIndex: 1, color: accent, display: 'inline-flex' }}>
-          {isDone ? <Icon name="check" size={14}/>
-            : isError ? <Icon name="alert" size={14}/>
-            : <Spinner size={13}/>}
-        </span>
-        <span style={{
-          position: 'relative', zIndex: 1, fontSize: 12.5, fontWeight: 500,
-          color: isDone ? 'oklch(0.38 0.13 155)'
-            : isError ? 'oklch(0.4 0.16 25)'
-            : 'oklch(0.38 0.14 45)',
-        }}>{label}</span>
-
-        {!isDone && !isError && (
-          <span className="mono" style={{
-            position: 'relative', zIndex: 1, marginLeft: 'auto',
-            fontSize: 11.5, fontWeight: 500,
-            color: 'oklch(0.42 0.13 45)',
-            fontVariantNumeric: 'tabular-nums',
-            paddingRight: hover ? 0 : 8,
-            minWidth: 32, textAlign: 'right',
-          }}>{Math.floor(progress)}%</span>
-        )}
-
-        {!isDone && !isError && hover && (
-          <button style={{
-            position: 'relative', zIndex: 1,
-            width: 24, height: 24, borderRadius: 6,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            color: 'oklch(0.42 0.13 45)', background: 'oklch(1 0 0 / 0.5)',
-          }}>
-            <Icon name="x" size={12}/>
-          </button>
-        )}
+/* ---------- Header slot mock — re-creates the Clip Detail top strip ---------- */
+const HeaderSlot = ({ children, sub, tall = false }) => (
+  <div style={{ padding: 24, background: 'var(--bg)', minHeight: tall ? 280 : 'auto' }}>
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 11, color: 'var(--fg-faint)', letterSpacing: 0.06, textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
+        Clip Detail · top right slot
       </div>
-      {stuck && !isDone && !isError && (
-        <div style={{
-          position: 'absolute', top: 'calc(100% + 6px)', left: 0,
-          fontSize: 11, color: 'var(--fg-muted)',
-          display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
-        }}>
-          <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 999, background: 'var(--amber)' }}/>
-          Still working…
-        </div>
-      )}
-    </div>
-  );
-};
-
-/* ---------- Header slot mock — same horizontal slot, different states ---------- */
-const HeaderSlot = ({ children, sub }) => (
-  <div style={{ padding: 24, background: 'var(--bg)' }}>
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 11, color: 'var(--fg-faint)', letterSpacing: 0.06, textTransform: 'uppercase', fontWeight: 600, marginBottom: 8 }}>
-        Clip Detail · top right
-      </div>
-      <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>{sub}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--fg-muted)', lineHeight: 1.5 }}>{sub}</div>
     </div>
     <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20,
       padding: '14px 16px', background: 'var(--bg-elev)',
       border: '1px dashed var(--border)', borderRadius: 'var(--radius-lg)',
     }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>The 3-word hook that 100x'd my views</div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 2 }}>4:00 – 4:34 · 34s · 9:16</div>
+      <div style={{ minWidth: 0, paddingTop: 4 }}>
+        <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' }}>Three words that 100x'd my views</div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4 }}>4:00 – 4:34 · 34s · 9:16</div>
       </div>
-      {children}
+      <div style={{ flexShrink: 0 }}>{children}</div>
     </div>
   </div>
 );
 
-const DownloadButton = () => (
-  <button className="btn btn-primary">
-    <Icon name="download" size={14}/> Download <Icon name="chevronDown" size={13}/>
-  </button>
-);
-
-const VariantsDropdown = () => (
-  <div style={{ position: 'relative' }}>
-    <DownloadButton/>
-    <div className="popover" style={{ width: 240, position: 'absolute', top: 'calc(100% + 6px)', right: 0 }}>
-      <div className="popover-head"><span>Available Variants</span></div>
-      {[
-        { label: 'Original', has: true },
-        { label: '+ Captions', has: false },
-        { label: '+ Vertical reframe', has: false },
-        { label: 'Captions + Reframe', has: false },
-      ].map((v, i) => (
-        <div key={i} style={{
-          display: 'flex', padding: '10px 14px', alignItems: 'center', gap: 10,
-          fontSize: 13, opacity: v.has ? 1 : 0.4,
-          borderBottom: '1px solid var(--border)',
-          background: i === 0 ? 'var(--bg-sunken)' : 'transparent',
-        }}>
-          <span style={{ color: 'var(--fg-faint)' }}><Icon name={v.has ? 'download' : 'x'} size={13}/></span>
-          <span style={{ flex: 1, textAlign: 'left' }}>{v.label}</span>
-          <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>MP4</span>
-        </div>
-      ))}
+/* ---------- Small section heading inside an artboard ---------- */
+const SectionLabel = ({ kicker, children }) => (
+  <div style={{ marginBottom: 18 }}>
+    <div style={{ fontSize: 11, color: 'var(--fg-faint)', letterSpacing: 0.06, textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
+      {kicker}
     </div>
+    <div style={{ fontSize: 13, color: 'var(--fg-muted)', maxWidth: 540, lineHeight: 1.55 }}>{children}</div>
   </div>
 );
 
-const OSDialog = () => (
-  <div style={{
-    position: 'absolute', top: 70, left: '50%', transform: 'translateX(-50%)',
-    width: 380, background: 'oklch(0.97 0.005 70)',
-    border: '1px solid oklch(0.78 0.008 70)',
-    borderRadius: 10, padding: 16,
-    boxShadow: '0 24px 60px oklch(0 0 0 / 0.25), 0 8px 16px oklch(0 0 0 / 0.1)',
-    zIndex: 10,
-  }}>
-    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--fg)', marginBottom: 4 }}>Save As</div>
-    <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 12 }}>Choose where to save the clip.</div>
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '8px 10px', background: 'var(--bg-elev)',
-      border: '1px solid var(--border)', borderRadius: 6,
-      fontSize: 12.5, fontFamily: 'var(--font-mono)',
-    }}>
-      <Icon name="folder" size={13}/>
-      <span style={{ flex: 1 }}>~/Downloads/p1-c1.mp4</span>
-    </div>
-    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
-      <button className="btn btn-sm">Cancel</button>
-      <button className="btn btn-sm btn-primary">Save</button>
-    </div>
-  </div>
-);
-
-/* ---------- Toast mocks ---------- */
-const ToastMock = ({ kind = 'success', title, body, action }) => (
-  <div className={`toast toast-${kind}`} style={{ position: 'static', minWidth: 320 }}>
-    <span className="toast-icon">
-      {kind === 'success' ? <Icon name="check" size={18}/>
-        : kind === 'error' ? <Icon name="alert" size={18}/>
-        : <Icon name="info" size={18}/>}
-    </span>
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div className="toast-title">{title}</div>
-      {body && <div className="toast-body" style={{ wordBreak: 'break-word' }}>{body}</div>}
-      {action && (
-        <button style={{
-          marginTop: 6, fontSize: 12, fontWeight: 500,
-          color: kind === 'error' ? 'var(--red)' : kind === 'success' ? 'oklch(0.42 0.13 155)' : 'var(--accent)',
-          padding: '3px 8px', marginLeft: -8, borderRadius: 4,
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-        }}>
-          {action} <Icon name="chevron" size={11}/>
-        </button>
-      )}
-    </div>
-    <button className="btn-ghost btn-sm btn-icon" style={{ height: 22, width: 22, color: 'var(--fg-faint)' }}>
-      <Icon name="x" size={14}/>
-    </button>
-  </div>
-);
-
-/* ---------- Jobs popover mock — to confirm download appears in it ---------- */
-const JobsPopoverMock = () => (
-  <div style={{ position: 'relative', width: 360, margin: '0 auto' }}>
-    <div className="popover" style={{ position: 'static', width: 360 }}>
-      <div className="popover-head">
-        <span>Running Jobs</span>
-        <span className="mono" style={{ color: 'var(--fg-faint)' }}>2</span>
-      </div>
-      <div>
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 500, fontSize: 13 }}>Course Module 4 — Hooks That Convert</div>
-              <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 2, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span style={{
-                  fontSize: 10, fontWeight: 500, padding: '1px 6px', borderRadius: 3,
-                  background: 'var(--accent-soft)', color: 'oklch(0.45 0.16 45)',
-                }}>DOWNLOAD</span>
-                Downloading clip — The 3-word hook…
-              </div>
-            </div>
-            <span className="mono" style={{ color: 'var(--fg-muted)', fontSize: 12 }}>42%</span>
-          </div>
-          <div style={{ height: 4, background: 'var(--bg-sunken)', borderRadius: 999, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: '42%', background: 'var(--accent)', borderRadius: 999 }}/>
-          </div>
-        </div>
-        <div style={{ padding: '12px 16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 500, fontSize: 13 }}>Live Q&A — March Cohort</div>
-              <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 2 }}>Cutting clips…</div>
-            </div>
-            <span className="mono" style={{ color: 'var(--fg-muted)', fontSize: 12 }}>62%</span>
-          </div>
-          <div style={{ height: 4, background: 'var(--bg-sunken)', borderRadius: 999, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: '62%', background: 'var(--accent)', borderRadius: 999 }}/>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-);
-
-/* ---------- Live demo — interactive chip with a launchable simulated download ---------- */
+/* ---------- Live demo — cycle through the 4 states ---------- */
 const LiveDemo = () => {
-  // We bring in StoreProvider so useDownloadManager can call pushToast. The chip
-  // demoed here is decoupled from a specific clip — we run our own little manager.
-  const [phase, setPhase] = useState('idle'); // idle | dialog | encoding | done | error | cancelled
-  const [progress, setProgress] = useState(0);
-  const [stuck, setStuck] = useState(false);
-  const [toast, setToast] = useState(null);
+  // Local rendering-state machine; mirrors what's in ClipFileActions but
+  // driven manually so the user can poke each state.
+  const [state, setState] = useState('unrendered'); // unrendered | rendering | ready | stale
+  const [pulse, setPulse] = useState(0);
 
+  // While "rendering", auto-flip to ready after a couple seconds
   useEffect(() => {
-    if (phase !== 'encoding') return;
-    setStuck(false);
-    let lastMove = Date.now();
-    const t = setInterval(() => {
-      setProgress(p => {
-        let n = p + 1.3 + Math.random() * 3;
-        if (p > 22 && p < 32 && Math.random() < 0.08) n = p; // momentary stall
-        if (Date.now() - lastMove > 9000) setStuck(true);
-        if (Math.abs(n - p) > 0.3) { lastMove = Date.now(); setStuck(false); }
-        if (n >= 100) {
-          clearInterval(t);
-          setPhase('done');
-          setTimeout(() => {
-            setPhase('idle');
-            setProgress(0);
-            setToast({ kind: 'success', title: 'Download ready', body: '~/Downloads/p1-c1.mp4 saved', action: 'Reveal in Finder' });
-            setTimeout(() => setToast(null), 5000);
-          }, 1000);
-          return 100;
-        }
-        return n;
-      });
-    }, 220);
-    return () => clearInterval(t);
-  }, [phase]);
+    if (state !== 'rendering') return;
+    const t = setTimeout(() => { setState('ready'); setPulse(p => p + 1); }, 2200);
+    return () => clearTimeout(t);
+  }, [state]);
 
-  const start = () => {
-    setProgress(0);
-    setPhase('dialog');
-    setTimeout(() => setPhase('encoding'), 800);
-  };
-  const cancel = () => {
-    setPhase('idle');
-    setProgress(0);
-    setToast({ kind: 'info', title: 'Download cancelled' });
-    setTimeout(() => setToast(null), 3000);
-  };
-  const fail = () => {
-    setPhase('error');
-    setTimeout(() => {
-      setPhase('idle');
-      setProgress(0);
-      setToast({ kind: 'error', title: 'Download failed', body: 'ffmpeg exited with code 1', action: 'Retry' });
-      setTimeout(() => setToast(null), 6000);
-    }, 700);
-  };
+  const node = useMemo(() => {
+    if (state === 'unrendered') return <UnrenderedState onPrepare={() => setState('rendering')}/>;
+    if (state === 'rendering')  return <RenderingState/>;
+    if (state === 'stale')      return <StaleState fullPath={SAMPLE_PATH} onReprepare={() => setState('rendering')}/>;
+    return (
+      <ReadyState
+        fullPath={SAMPLE_PATH}
+        onReveal={() => setPulse(p => p + 1)}
+      />
+    );
+  }, [state, pulse]);
 
   return (
-    <div style={{ background: 'var(--bg)', padding: 32, minHeight: 480, position: 'relative' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>The 3-word hook that 100x'd my views</div>
-          <div className="mono" style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 4 }}>4:00 – 4:34 · 34s · 9:16</div>
+    <div style={{ background: 'var(--bg)', padding: 24, minHeight: 480, display: 'flex', flexDirection: 'column' }}>
+      <SectionLabel kicker="Interactive">Drive the state machine. Each button represents an external trigger (file ready, file deleted, trim bounds changed, etc).</SectionLabel>
+
+      <div style={{
+        flex: 1,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20,
+        padding: '16px 18px',
+        background: 'var(--bg-elev)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        marginBottom: 18,
+      }}>
+        <div style={{ minWidth: 0, paddingTop: 4 }}>
+          <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.01em' }}>Three words that 100x'd my views</div>
+          <div className="mono" style={{ fontSize: 11.5, color: 'var(--fg-faint)', marginTop: 5 }}>4:00 – 4:34 · 34s · 9:16 vertical</div>
         </div>
-        <div>
-          {(phase === 'idle' || phase === 'dialog') && (
-            <div style={{ position: 'relative' }}>
-              <button className="btn btn-primary" onClick={start} disabled={phase === 'dialog'}>
-                <Icon name="download" size={14}/> Download <Icon name="chevronDown" size={13}/>
-              </button>
-              {phase === 'dialog' && <OSDialog/>}
-            </div>
-          )}
-          {(phase === 'encoding' || phase === 'done' || phase === 'error') && (
-            <StaticChip phase={phase === 'done' ? 'done' : phase === 'error' ? 'error' : (progress > 80 ? 'saving' : 'encoding')} progress={progress} stuck={stuck} hover={false}/>
-          )}
-        </div>
+        <div style={{ flexShrink: 0 }}>{node}</div>
       </div>
 
       <div style={{
-        marginTop: 32, padding: 16, borderRadius: 'var(--radius)',
+        padding: 14, borderRadius: 'var(--radius)',
         background: 'var(--bg-sunken)', border: '1px solid var(--border)',
         display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
       }}>
-        <span style={{ fontSize: 12, color: 'var(--fg-muted)', marginRight: 6 }}>Drive the flow:</span>
-        <button className="btn btn-sm" onClick={start} disabled={phase !== 'idle'}>Click "Download → Original"</button>
-        <button className="btn btn-sm" onClick={cancel} disabled={phase !== 'encoding'}>Cancel mid-encode</button>
-        <button className="btn btn-sm" onClick={fail} disabled={phase !== 'encoding'}>Trigger error</button>
-        <button className="btn btn-sm" onClick={() => { setPhase('idle'); setProgress(0); setToast(null); }}>Reset</button>
+        <span style={{ fontSize: 12, color: 'var(--fg-muted)', marginRight: 6 }}>State:</span>
+        {['unrendered', 'rendering', 'ready', 'stale'].map(s => (
+          <button
+            key={s}
+            onClick={() => setState(s)}
+            className={state === s ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
+          >
+            {s}
+          </button>
+        ))}
         <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>
-          phase: {phase} · progress: {Math.floor(progress)}%
+          current: {state}
         </span>
       </div>
-
-      {toast && (
-        <div style={{ position: 'absolute', bottom: 24, right: 24 }}>
-          <ToastMock kind={toast.kind} title={toast.title} body={toast.body} action={toast.action}/>
-        </div>
-      )}
     </div>
   );
 };
 
-/* ---------- Notes block — visible per artboard ---------- */
-const Note = ({ children }) => (
-  <div style={{
-    padding: '10px 14px',
-    background: 'var(--bg-sunken)',
-    borderRadius: 'var(--radius)',
-    fontSize: 12.5, color: 'var(--fg-muted)',
-    lineHeight: 1.55,
-    border: '1px solid var(--border)',
-  }}>
-    {children}
-  </div>
-);
-
-const ChipDemo = ({ title, sub, children }) => (
-  <div style={{ padding: 32, background: 'var(--bg)', minHeight: 240 }}>
-    <div style={{ fontSize: 11, color: 'var(--fg-faint)', letterSpacing: 0.06, textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
-      {title}
-    </div>
-    <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 28, maxWidth: 360 }}>{sub}</div>
-    <div style={{ marginBottom: 36 }}>{children}</div>
-  </div>
-);
-
-/* ---------- Anatomy callout ---------- */
-const Anatomy = () => {
+/* ---------- Anatomy of the Ready state ---------- */
+const ReadyAnatomy = () => {
   const parts = [
-    { dot: 'var(--accent)', label: 'Spinner', sub: 'Phase signal — replaced by ✓ on done, ⚠ on error' },
-    { dot: 'oklch(0.38 0.14 45)', label: 'Label', sub: 'Encoding… → Saving… → Done' },
-    { dot: 'oklch(0.93 0.06 65)', label: 'Progress fill', sub: 'Determinate width inside chip; barber-pole shimmer when <2%' },
-    { dot: 'var(--fg-muted)', label: 'Mono percentage', sub: 'JetBrains Mono, tabular numerals' },
-    { dot: 'oklch(0.42 0.13 45)', label: 'Cancel', sub: 'Slides in on hover; click stops the encode' },
+    { dot: 'var(--green)', label: 'Confirmation', sub: 'Check chip + "Clip is in your project folder" — green accent, low-key.' },
+    { dot: 'var(--fg-muted)', label: 'Path display', sub: 'Mono row showing full path. Truncated mid-string with ellipsis; full path on hover (title attr).' },
+    { dot: 'var(--accent)', label: 'Show in ' + FILE_MANAGER, sub: 'Primary — the only action. Opens the OS file manager with the mp4 selected so the user can drag it into their editor.' },
   ];
   return (
-    <div style={{ padding: 32, background: 'var(--bg)', minHeight: 320 }}>
-      <div style={{ fontSize: 11, color: 'var(--fg-faint)', letterSpacing: 0.06, textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
-        Anatomy
+    <div style={{ padding: 28, background: 'var(--bg)', minHeight: 480 }}>
+      <SectionLabel kicker="Anatomy — Ready state">
+        The most important of the four. Visual goal: tell the user "your file exists, here's where, here's what to do with it" — no clicks wasted on confirming intent.
+      </SectionLabel>
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28, marginTop: 8 }}>
+        <ReadyState
+          fullPath={SAMPLE_PATH}
+          onReveal={() => {}}
+        />
       </div>
-      <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 24, maxWidth: 480 }}>
-        Same 36px height, same border-radius, same horizontal slot as the Download button. Progress fills left→right inside the chip itself.
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
-        <StaticChip phase="encoding" progress={52} hover={true}/>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '10px 14px', alignItems: 'baseline' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '10px 14px', alignItems: 'baseline', maxWidth: 620, margin: '0 auto' }}>
         {parts.map((p, i) => (
           <React.Fragment key={i}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
               <span style={{ width: 8, height: 8, borderRadius: 999, background: p.dot, display: 'inline-block' }}/>
-              <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--fg)' }}>{p.label}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg)' }}>{p.label}</span>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>{p.sub}</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.55 }}>{p.sub}</div>
           </React.Fragment>
         ))}
       </div>
@@ -421,32 +147,33 @@ const Anatomy = () => {
   );
 };
 
-/* ---------- Storyboard — sequential timeline of states ---------- */
-const Timeline = () => {
+/* ---------- Storyboard — the lifecycle a clip moves through ---------- */
+const Lifecycle = () => {
   const beats = [
-    { t: '0ms', state: 'A — Idle', node: <DownloadButton/>, note: 'Download button + variants dropdown.' },
-    { t: '+0ms (click)', state: 'B → save dialog', node: <div style={{ position: 'relative' }}><DownloadButton/></div>, note: 'OS Save As surfaces immediately, before encoding.' },
-    { t: '+100ms', state: 'C — Chip appears', node: <StaticChip phase="encoding" progress={2}/>, note: 'Indeterminate shimmer for the first second.' },
-    { t: '+2s', state: 'D — Encoding', node: <StaticChip phase="encoding" progress={32}/>, note: 'Determinate progress fill driven by ffmpeg.' },
-    { t: '+9s', state: 'D — Saving', node: <StaticChip phase="saving" progress={87}/>, note: 'Past 80%, label flips to "Saving…".' },
-    { t: '+11s', state: 'E — Done', node: <StaticChip phase="done"/>, note: '~1s success flash, then collapses.' },
-    { t: '+12s', state: 'A — Idle', node: <DownloadButton/>, note: 'Toast confirms; button is back.' },
+    { tag: 'On arrival', title: '① Unrendered', node: <UnrenderedState onPrepare={() => {}}/>, note: 'User lands on the clip for the first time. No mp4 on disk.' },
+    { tag: 'On click', title: '② Rendering', node: <RenderingState/>, note: 'ffmpeg cuts the clip from the source video into the project folder.' },
+    { tag: 'On success', title: '③ Ready', node: <ReadyState fullPath={SAMPLE_PATH} onReveal={()=>{}}/>, note: 'File exists; user reveals it in the OS file manager and the path.' },
+    { tag: 'After re-trim', title: '④ Stale', node: <StaleState fullPath={SAMPLE_PATH} onReprepare={()=>{}}/>, note: 'User trimmed; on-disk mp4 reflects the old cut.' },
   ];
   return (
-    <div style={{ padding: 32, background: 'var(--bg)' }}>
-      <div style={{ fontSize: 11, color: 'var(--fg-faint)', letterSpacing: 0.06, textTransform: 'uppercase', fontWeight: 600, marginBottom: 6 }}>
-        Happy-path timeline
-      </div>
-      <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 24, maxWidth: 540 }}>
-        The chip lives in the same slot as the Download button — no layout shift. Phases are signalled by label + fill width + (briefly) color.
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 12 }}>
+    <div style={{ padding: 28, background: 'var(--bg)' }}>
+      <SectionLabel kicker="Lifecycle">
+        How a clip moves through the four states. The card stays anchored in the same slot the whole time — no buttons hopping around.
+      </SectionLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginTop: 12 }}>
         {beats.map((b, i) => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
-            <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)' }}>{b.t}</div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg)', letterSpacing: '-0.005em' }}>{b.state}</div>
-            <div style={{ minHeight: 40, display: 'flex', alignItems: 'center' }}>{b.node}</div>
-            <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', lineHeight: 1.5 }}>{b.note}</div>
+          <div key={i} style={{
+            display: 'grid',
+            gridTemplateColumns: '120px 1fr',
+            gap: 24,
+            alignItems: 'center',
+          }}>
+            <div>
+              <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)', letterSpacing: 0.04, textTransform: 'uppercase' }}>{b.tag}</div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--fg)', marginTop: 4 }}>{b.title}</div>
+              <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6, lineHeight: 1.5 }}>{b.note}</div>
+            </div>
+            <div>{b.node}</div>
           </div>
         ))}
       </div>
@@ -454,129 +181,164 @@ const Timeline = () => {
   );
 };
 
+/* ---------- Path-truncation showcase ---------- */
+const PathVariants = () => (
+  <div style={{ padding: 28, background: 'var(--bg)' }}>
+    <SectionLabel kicker="Path display">
+      The filename comes from the clip's title, not the internal id. Path truncates mid-string with ellipsis when too long; full path on hover (title attr). UTF-8 / CJK is fine.
+    </SectionLabel>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 540 }}>
+      <PathRow fullPath="~/Documents/ClipForge/Demo/clips/intro.mp4"/>
+      <PathRow fullPath={SAMPLE_PATH}/>
+      <PathRow fullPath={SAMPLE_PATH_LONG}/>
+      <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', marginTop: 4, lineHeight: 1.5 }}>
+        Hover any row to see the un-truncated path as a native tooltip.
+      </div>
+    </div>
+  </div>
+);
+
+/* ---------- Platform copy table ---------- */
+const PlatformCopy = () => {
+  const rows = [
+    { state: 'Unrendered', mac: '"Prepare clip"',                               win: '"Prepare clip"' },
+    { state: 'Rendering',  mac: '"Preparing clip…"',                            win: '"Preparing clip…"' },
+    { state: 'Ready',      mac: '"Show in Finder"',                             win: '"Show in File Explorer"' },
+    { state: 'Stale',      mac: '"Re-prepare clip"',                            win: '"Re-prepare clip"' },
+  ];
+  return (
+    <div style={{ padding: 28, background: 'var(--bg)', minHeight: 360 }}>
+      <SectionLabel kicker="Copy">
+        Only one label flips on platform — the reveal action. Detect via <span className="mono" style={{ background: 'var(--bg-sunken)', padding: '1px 5px', borderRadius: 3, fontSize: 11 }}>navigator.platform</span>. Don't translate "Re-prepare" / "Prepare" — they're intentional.
+      </SectionLabel>
+      <table style={{ width: '100%', maxWidth: 580, borderCollapse: 'collapse', fontSize: 12.5 }}>
+        <thead>
+          <tr style={{ textAlign: 'left' }}>
+            <th style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', fontWeight: 500, color: 'var(--fg-muted)' }}>State</th>
+            <th style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', fontWeight: 500, color: 'var(--fg-muted)' }}>macOS</th>
+            <th style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', fontWeight: 500, color: 'var(--fg-muted)' }}>Windows</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', color: 'var(--fg-muted)' }}>{r.state}</td>
+              <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--font-mono)', color: 'var(--fg)' }}>{r.mac}</td>
+              <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--font-mono)', color: 'var(--fg)' }}>{r.win}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+/* ---------- Notes block ---------- */
+const Note = ({ kind = 'note', children }) => (
+  <div style={{
+    padding: '12px 14px',
+    background: kind === 'kill' ? 'oklch(0.98 0.025 25)' : 'var(--bg-sunken)',
+    borderRadius: 'var(--radius)',
+    fontSize: 12.5, color: 'var(--fg-muted)',
+    lineHeight: 1.6,
+    border: '1px solid ' + (kind === 'kill' ? 'oklch(0.92 0.04 25)' : 'var(--border)'),
+    display: 'flex', gap: 10, alignItems: 'flex-start',
+  }}>
+    <span style={{
+      fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 999,
+      background: kind === 'kill' ? 'oklch(0.94 0.06 25)' : 'var(--bg-elev)',
+      color: kind === 'kill' ? 'var(--red)' : 'var(--fg-muted)',
+      letterSpacing: 0.04, textTransform: 'uppercase',
+      flexShrink: 0, marginTop: 1,
+    }}>
+      {kind === 'kill' ? 'Removed' : 'Note'}
+    </span>
+    <div style={{ flex: 1 }}>{children}</div>
+  </div>
+);
+
 /* ---------- Main canvas ---------- */
 const App = () => (
-  <DesignCanvas title="Download progress feedback" subtitle="Clip Detail · Download flow · States A → G">
-    <DCSection id="live" title="Interactive demo" subtitle="Drive the chip through each phase">
-      <DCArtboard id="live-demo" label="Live · click Download to start" width={760} height={520}>
+  <DesignCanvas title="Clip Detail · File-on-disk actions" subtitle="ClipForge is a desktop app. The clip mp4 lives in the user's project folder. The old 'Download' button pretended we were a website — this replaces it.">
+
+    <DCSection id="live" title="Interactive demo" subtitle="Cycle through the four states">
+      <DCArtboard id="live-demo" label="Live · cycle states" width={820} height={520}>
         <LiveDemo/>
       </DCArtboard>
-      <DCArtboard id="anatomy" label="Anatomy" width={620} height={520}>
-        <Anatomy/>
+      <DCArtboard id="anatomy" label="Anatomy · Ready state" width={680} height={520}>
+        <ReadyAnatomy/>
       </DCArtboard>
     </DCSection>
 
-    <DCSection id="storyboard" title="Happy path timeline" subtitle="A → B → C → D → E → A — same horizontal slot throughout">
-      <DCArtboard id="timeline" label="Timeline" width={1400} height={300}>
-        <Timeline/>
+    <DCSection id="lifecycle" title="Lifecycle" subtitle="① Unrendered → ② Rendering → ③ Ready → (re-trim) → ④ Stale → ② Rendering → ③ Ready">
+      <DCArtboard id="lifecycle" label="Lifecycle storyboard" width={780} height={760}>
+        <Lifecycle/>
       </DCArtboard>
     </DCSection>
 
-    <DCSection id="states" title="States" subtitle="Each frame is the Clip Detail header, top-right">
-      <DCArtboard id="state-a" label="A · Idle" width={560} height={260}>
-        <HeaderSlot sub="Download button shows the variants dropdown.">
-          <DownloadButton/>
+    <DCSection id="header-slots" title="In context — Clip Detail header" subtitle="Same anchor, same prominence. Card width adapts to state; nothing else on the page moves.">
+      <DCArtboard id="slot-unrendered" label="① Unrendered" width={680} height={320}>
+        <HeaderSlot sub="First time the user opens this clip. The action surface tells them what would happen + a primary CTA.">
+          <UnrenderedState onPrepare={()=>{}}/>
         </HeaderSlot>
       </DCArtboard>
 
-      <DCArtboard id="state-a-open" label="A · Variants open" width={560} height={420}>
-        <HeaderSlot sub="Original is enabled. Other variants dimmed (already designed).">
-          <VariantsDropdown/>
+      <DCArtboard id="slot-rendering" label="② Rendering" width={680} height={320}>
+        <HeaderSlot sub="ffmpeg is running. Same slot, indeterminate shimmer (we have no progress telemetry).">
+          <RenderingState/>
         </HeaderSlot>
       </DCArtboard>
 
-      <DCArtboard id="state-b" label="B · Variant clicked → OS dialog" width={560} height={420}>
-        <div style={{ position: 'relative', height: '100%' }}>
-          <HeaderSlot sub="Native Save As surfaces first. If cancelled, chip never appears — button stays.">
-            <DownloadButton/>
-          </HeaderSlot>
-          <OSDialog/>
-        </div>
-      </DCArtboard>
-
-      <DCArtboard id="state-d-early" label="D · Encoding · early (indeterminate)" width={560} height={260}>
-        <HeaderSlot sub="First ~1s before ffmpeg reports progress: barber-pole shimmer over the bar.">
-          <StaticChip phase="encoding" progress={1}/>
+      <DCArtboard id="slot-ready" label="③ Ready" width={740} height={340}>
+        <HeaderSlot sub="The most important state. Confirmation + path + actions all live here — no popovers, no toasts to acknowledge.">
+          <ReadyState fullPath={SAMPLE_PATH} onReveal={()=>{}}/>
         </HeaderSlot>
       </DCArtboard>
 
-      <DCArtboard id="state-d" label="D · Encoding · 42%" width={560} height={260}>
-        <HeaderSlot sub="Determinate fill, mono percentage. Same slot, same width as the button.">
-          <StaticChip phase="encoding" progress={42}/>
-        </HeaderSlot>
-      </DCArtboard>
-
-      <DCArtboard id="state-d-hover" label="D · Hover · cancel revealed" width={560} height={260}>
-        <HeaderSlot sub="Cancel X slides in on hover. Percentage stays put.">
-          <StaticChip phase="encoding" progress={42} hover={true}/>
-        </HeaderSlot>
-      </DCArtboard>
-
-      <DCArtboard id="state-d-saving" label="D · Saving · 87%" width={560} height={260}>
-        <HeaderSlot sub="Past 80%, label flips to 'Saving…' to mirror what the user sees on disk.">
-          <StaticChip phase="saving" progress={87}/>
-        </HeaderSlot>
-      </DCArtboard>
-
-      <DCArtboard id="state-d-stuck" label="Edge · Stuck (>10s no movement)" width={560} height={300}>
-        <HeaderSlot sub="Subtle 'Still working…' hint below the chip — calm, not alarming.">
-          <StaticChip phase="encoding" progress={28} stuck={true}/>
-        </HeaderSlot>
-      </DCArtboard>
-
-      <DCArtboard id="state-e" label="E · Done flash (1s)" width={560} height={260}>
-        <HeaderSlot sub="Brief green success flash, then collapse to Download button + toast.">
-          <StaticChip phase="done"/>
-        </HeaderSlot>
-      </DCArtboard>
-
-      <DCArtboard id="state-f" label="F · Failure" width={560} height={260}>
-        <HeaderSlot sub="Chip flashes error, collapses. Error toast carries Retry.">
-          <StaticChip phase="error"/>
+      <DCArtboard id="slot-stale" label="④ Stale" width={740} height={340}>
+        <HeaderSlot sub="User trimmed after rendering. Amber accent. Stale path still shown — a user who's OK with the old cut can still get to it.">
+          <StaleState fullPath={SAMPLE_PATH} onReprepare={()=>{}}/>
         </HeaderSlot>
       </DCArtboard>
     </DCSection>
 
-    <DCSection id="toasts" title="Confirmation & error toasts" subtitle="Use the existing toast system, top-right">
-      <DCArtboard id="toast-success" label="Success" width={420} height={180}>
-        <div style={{ padding: 32, background: 'var(--bg)', display: 'grid', placeItems: 'center', minHeight: '100%' }}>
-          <ToastMock kind="success" title="Download ready" body="~/Downloads/p1-c1.mp4 saved" action="Reveal in Finder"/>
-        </div>
+    <DCSection id="paths" title="Path display" subtitle="Filename comes from the clip's title">
+      <DCArtboard id="path-truncation" label="Truncation & long paths" width={680} height={300}>
+        <PathVariants/>
       </DCArtboard>
-      <DCArtboard id="toast-error" label="Error" width={420} height={180}>
-        <div style={{ padding: 32, background: 'var(--bg)', display: 'grid', placeItems: 'center', minHeight: '100%' }}>
-          <ToastMock kind="error" title="Download failed" body="ffmpeg exited with code 1 — codec not found" action="Retry"/>
-        </div>
-      </DCArtboard>
-      <DCArtboard id="toast-cancel" label="Cancelled" width={420} height={180}>
-        <div style={{ padding: 32, background: 'var(--bg)', display: 'grid', placeItems: 'center', minHeight: '100%' }}>
-          <ToastMock kind="info" title="Download cancelled"/>
-        </div>
-      </DCArtboard>
-    </DCSection>
-
-    <DCSection id="jobs" title="Jobs popover (existing)" subtitle="Confirms the download appears in the global job list — not redesigned">
-      <DCArtboard id="jobs-popover" label="Jobs popover with download" width={440} height={280}>
-        <div style={{ padding: 32, background: 'var(--bg)', minHeight: '100%' }}>
-          <JobsPopoverMock/>
-        </div>
+      <DCArtboard id="platform-copy" label="Platform-specific copy" width={680} height={360}>
+        <PlatformCopy/>
       </DCArtboard>
     </DCSection>
 
     <DCSection id="notes" title="Decisions & out-of-scope" subtitle="">
-      <DCArtboard id="decisions" label="Notes" width={760} height={420}>
-        <div style={{ padding: 32, background: 'var(--bg)', display: 'grid', gap: 12 }}>
-          <Note><b style={{ color: 'var(--fg)' }}>Same slot, same height.</b> The chip is 36px tall with min-width 156px — close to the Download button — so the header doesn't reflow when it appears.</Note>
-          <Note><b style={{ color: 'var(--fg)' }}>OS dialog before chip.</b> The save-location prompt fires synchronously on variant click. If dismissed, no chip appears — the button just sits there.</Note>
-          <Note><b style={{ color: 'var(--fg)' }}>Duplicate clicks are no-ops.</b> While a chip is up, the button is gone, so re-clicking the variant is impossible. If the user navigates away and back, the chip returns from manager state.</Note>
-          <Note><b style={{ color: 'var(--fg)' }}>Background.</b> Each clip's chip is keyed on clipId. A user can run multiple downloads across Clip Detail pages — each clip has its own chip; all of them appear in the Jobs popover.</Note>
-          <Note><b style={{ color: 'var(--fg)' }}>Out of scope.</b> Variant generation other than Original, queueing/pause/resume, persisting downloads across reload, default-save-location memory, batch download.</Note>
+      <DCArtboard id="kept" label="Kept" width={760} height={340}>
+        <div style={{ padding: 28, background: 'var(--bg)', display: 'grid', gap: 12 }}>
+          <Note><b style={{ color: 'var(--fg)' }}>Same slot, same anchor.</b> Top-right of Clip Detail. The card width changes by state but the page layout doesn't shift.</Note>
+          <Note><b style={{ color: 'var(--fg)' }}>Title-derived filename.</b> The mp4 is named after the clip's title, not the internal id. So a Mandarin clip ends up on disk as <span className="mono" style={{ background: 'var(--bg-sunken)', padding: '1px 5px', borderRadius: 3 }}>AI 时代…mp4</span> — recognizable in Finder.</Note>
+          <Note><b style={{ color: 'var(--fg)' }}>Stale ≠ broken.</b> Stale state still surfaces the on-disk path, muted with a strike-through, so the user can grab the old cut if that's what they want.</Note>
+          <Note><b style={{ color: 'var(--fg)' }}>One platform flip.</b> Only the reveal label changes copy — "Show in Finder" / "Show in File Explorer".</Note>
+        </div>
+      </DCArtboard>
+      <DCArtboard id="removed" label="Removed" width={760} height={340}>
+        <div style={{ padding: 28, background: 'var(--bg)', display: 'grid', gap: 12 }}>
+          <Note kind="kill">The <b>Encoding… → Saving… → Done</b> chip. No HTTP round-trip means no transfer to narrate.</Note>
+          <Note kind="kill">The <b>"Still working…"</b> stuck hint. We render locally; if ffmpeg hangs that's a real bug, not a UI state.</Note>
+          <Note kind="kill">The <b>error toast with "Copy error details"</b> button + the diagnostic modal. Surface as a normal failure in the Jobs popover when it does happen.</Note>
+          <Note kind="kill">The <b>variants dropdown</b> on this control. "Original" is the only file the affordance manages; captions / vertical reframe stay in the variant tabs below the player.</Note>
+        </div>
+      </DCArtboard>
+      <DCArtboard id="oos" label="Out of scope" width={760} height={300}>
+        <div style={{ padding: 28, background: 'var(--bg)', display: 'grid', gap: 12 }}>
+          <Note><b style={{ color: 'var(--fg)' }}>Bulk "Show all ready clips in Finder".</b> Project-level concern, separate flow.</Note>
+          <Note><b style={{ color: 'var(--fg)' }}>A "Downloads" or "Exports" list.</b> The project folder is the list.</Note>
+          <Note><b style={{ color: 'var(--fg)' }}>"Send to Premiere" / share sheets.</b> Native drag-out from the file manager covers this.</Note>
+          <Note><b style={{ color: 'var(--fg)' }}>Cleaning up old files on clip delete.</b> Separate concern.</Note>
         </div>
       </DCArtboard>
     </DCSection>
   </DesignCanvas>
 );
 
-// We don't actually need StoreProvider here since LiveDemo manages its own toast.
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App/>);

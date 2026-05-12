@@ -1,4 +1,4 @@
-/* global React, Icon, Spinner, useStore, useRouter, Link, fmtTime, SAMPLE_TRANSCRIPT, TrimPanel, DownloadControl, useDownloadManager, CutDivider, CutTickRail, CutsSummary, REASON_META */
+/* global React, Icon, Spinner, useStore, useRouter, Link, fmtTime, SAMPLE_TRANSCRIPT, TrimPanel, ClipFileActions, CutDivider, CutTickRail, CutsSummary, REASON_META */
 const { useState, useEffect, useRef, useMemo } = React;
 
 const ClipDetail = ({ projectId, clipId, hint }) => {
@@ -16,7 +16,6 @@ const ClipDetail = ({ projectId, clipId, hint }) => {
   const [genProgress, setGenProgress] = useState(0);
   const [previewBand, setPreviewBand] = useState(null); // {start,end} while dragging trim handles
   const [landedFlash, setLandedFlash] = useState(false); // brief highlight after navigating from auto-cut report
-  const downloadManager = useDownloadManager();
 
   // Auto-cut report deep link: ?at=<source seconds>&cut=<id>
   // Seeks the scrubber to the cut moment on mount and flashes a one-shot
@@ -237,7 +236,7 @@ const ClipDetail = ({ projectId, clipId, hint }) => {
             <span>9:16 vertical</span>
           </div>
         </div>
-        <DownloadControl clip={clip} variants={variants} manager={downloadManager}/>
+        <ClipFileActions clip={clip} project={project} updateClip={updateClip} pushToast={pushToast}/>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 24, alignItems: 'flex-start' }}>
