@@ -198,6 +198,51 @@ async fn pick_project_dir(app: AppHandle) -> Result<Option<String>, String> {
     }
 }
 
+/// Open the OS file manager with the given path selected. On macOS uses
+/// `open -R`, on Windows `explorer /select,`. This is how Clip Detail's
+/// "Show in Finder" / "Show in File Explorer" button surfaces the rendered
+/// mp4 — the file is already on disk in the user's project folder, so the
+/// frontend just needs to point them at it. No file copy, no HTTP transfer.
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("open -R failed: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // explorer.exe returns a non-zero exit code even on success — known
+        // quirk; we don't await the child so we never see it anyway. The
+        // comma in "/select,<path>" is part of the syntax, not a separator.
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path))
+            .spawn()
+            .map_err(|e| format!("explorer /select failed: {}", e))?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Linux / BSD: no standard "select this file" gesture; the next-best
+        // thing is opening the containing directory.
+        let parent = p.parent().ok_or_else(|| "no parent directory".to_string())?;
+        std::process::Command::new("xdg-open")
+            .arg(parent)
+            .spawn()
+            .map_err(|e| format!("xdg-open failed: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -232,7 +277,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_backend_url,
             get_project_dir,
-            pick_project_dir
+            pick_project_dir,
+            reveal_path
         ])
         .build(tauri::generate_context!())
         .expect("failed to build tauri app")

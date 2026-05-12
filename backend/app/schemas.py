@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from . import _project_paths as pp
 from .datastore import ClipInterval as ClipIntervalRow
 from .datastore import ClipRemovedCut as ClipRemovedCutRow
 from .datastore import ClipRow, ProjectRow
@@ -92,6 +93,15 @@ class Clip(APIModel):
     thumb_frame: int
     original: ClipOriginal
     needs_render: bool
+    # True iff an mp4 currently exists at the expected path AND bounds
+    # haven't changed since it was rendered. The Clip Detail file-actions
+    # surface uses this to pick between Unrendered / Ready / Stale states.
+    rendered: bool = False
+    # Absolute path to the rendered mp4 when one exists on disk (whether
+    # in-sync or stale). Frontend pairs this with a Tauri "reveal" command
+    # so the user can open the file in Finder / File Explorer. Null when no
+    # file has ever been rendered for this clip.
+    rendered_path: str | None = None
 
 
 class ProjectCut(APIModel):
@@ -201,10 +211,22 @@ def _row_removed_cuts(
     return out
 
 
-def clip_row_to_dto(row: ClipRow) -> Clip:
+def clip_row_to_dto(row: ClipRow, project: ProjectRow | None = None) -> Clip:
     intervals = _row_intervals(row)
     compact_duration = sum(i.end_sec - i.start_sec for i in intervals)
     removed_cuts = _row_removed_cuts(row, intervals)
+    # Resolve the on-disk path (and whether it exists in-sync) when we
+    # have the project context. Callers without project context (legacy
+    # paths) get the default values — the Clip Detail surface always
+    # provides project, so this only affects List endpoints where the
+    # render badge isn't surfaced.
+    rendered = False
+    rendered_path: str | None = None
+    if project is not None:
+        path = pp.clip_path(project, row.id, row.title)
+        if path.exists():
+            rendered_path = str(path)
+            rendered = not row.needs_render
     return Clip(
         id=row.id,
         project_id=row.project_id,
@@ -225,4 +247,6 @@ def clip_row_to_dto(row: ClipRow) -> Clip:
             start_sec=row.original_start_sec, end_sec=row.original_end_sec
         ),
         needs_render=row.needs_render,
+        rendered=rendered,
+        rendered_path=rendered_path,
     )

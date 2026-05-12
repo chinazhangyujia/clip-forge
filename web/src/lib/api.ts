@@ -15,10 +15,13 @@ const baseUrl = (): string => _base;
 
 type TauriWindow = { __TAURI_INTERNALS__?: unknown };
 
+export function isTauri(): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean((window as unknown as TauriWindow).__TAURI_INTERNALS__);
+}
+
 export async function initApi(): Promise<void> {
-  if (typeof window === "undefined") return;
-  const tauri = (window as unknown as TauriWindow).__TAURI_INTERNALS__;
-  if (!tauri) return;
+  if (!isTauri()) return;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const url = await invoke<string>("get_backend_url");
@@ -26,6 +29,17 @@ export async function initApi(): Promise<void> {
   } catch (e) {
     console.error("get_backend_url failed; falling back to default base", e);
   }
+}
+
+// Tauri "show in Finder / File Explorer" — opens the OS file manager with
+// the given absolute path selected. No-op in non-Tauri (web) builds, since
+// the browser sandbox has no native filesystem access.
+export async function revealPath(path: string): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("File reveal is only available in the desktop app.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("reveal_path", { path });
 }
 
 // btoa() only accepts Latin1, so encode UTF-8 bytes manually before base64.
@@ -311,6 +325,16 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(bounds),
       }),
+    );
+  },
+
+  // Kick off (or no-op on) a render of this clip's mp4 into the project
+  // folder. Returns the updated Clip DTO with `rendered` and `renderedPath`
+  // populated. The desktop UX calls this instead of the legacy
+  // /clips/{id}/download HTTP body-transfer flow.
+  prepareClip: async (clipId: string): Promise<Clip> => {
+    return jsonOrThrow(
+      await fetch(`${baseUrl()}/clips/${clipId}/prepare`, { method: "POST" }),
     );
   },
 

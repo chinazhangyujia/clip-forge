@@ -251,8 +251,9 @@ async def delete_project(project_id: str) -> None:
 )
 async def list_clips(project_id: str) -> list[Clip]:
     ds = get_datastore()
+    project = await ds.get_project(project_id)
     rows = await ds.list_clips(project_id)
-    return [clip_row_to_dto(r) for r in rows]
+    return [clip_row_to_dto(r, project) for r in rows]
 
 
 @router.get(

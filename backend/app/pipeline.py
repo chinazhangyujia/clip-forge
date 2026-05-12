@@ -776,7 +776,7 @@ async def ensure_clip_rendered(project_id: str, clip_id: str) -> Path:
     if row is None:
         raise RuntimeError(f"Clip {clip_id} not found")
     project = await _get_project(project_id)
-    path = pp.clip_path(project, clip_id)
+    path = pp.clip_path(project, clip_id, row.title)
     if not row.needs_render and path.exists():
         return path
     lock = await _get_render_lock(clip_id)
@@ -786,12 +786,13 @@ async def ensure_clip_rendered(project_id: str, clip_id: str) -> Path:
         row = await ds.get_clip(clip_id)
         if row is None:
             raise RuntimeError(f"Clip {clip_id} deleted during render")
+        path = pp.clip_path(project, clip_id, row.title)
         if not row.needs_render and path.exists():
             return path
         intervals = [(iv.start_sec, iv.end_sec) for iv in row.intervals] or [
             (row.start_sec, row.end_sec)
         ]
-        await slice_clip(row.project_id, clip_id, intervals)
+        await slice_clip(row.project_id, clip_id, intervals, title=row.title)
         await ds.update_clip(
             clip_id,
             {"needs_render": False, "updated_at": int(time.time() * 1000)},
@@ -800,7 +801,11 @@ async def ensure_clip_rendered(project_id: str, clip_id: str) -> Path:
 
 
 async def slice_clip(
-    project_id: str, clip_id: str, intervals: list[tuple[float, float]]
+    project_id: str,
+    clip_id: str,
+    intervals: list[tuple[float, float]],
+    *,
+    title: str | None = None,
 ) -> Path:
     """Render a clip from one or more source-time intervals.
 
@@ -826,7 +831,7 @@ async def slice_clip(
     src_path = pp.source_path(project)
     if not src_path.exists():
         raise RuntimeError("Source file not found")
-    out_path = pp.clip_path(project, clip_id)
+    out_path = pp.clip_path(project, clip_id, title)
 
     if len(intervals) == 1:
         s, e = intervals[0]

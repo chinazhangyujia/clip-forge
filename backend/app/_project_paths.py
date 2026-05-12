@@ -17,11 +17,18 @@ row is inserted).
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
 from .config import settings
 from .datastore.base import ProjectRow
+
+# Characters illegal in filenames on Windows (the union of NTFS + FAT32 reserved
+# chars, which is the strictest target). Posix is fine with everything except /
+# and the NUL byte. Stripping this set makes the same sanitized filename work
+# on either platform without surprising mojibake or rename failures.
+_FILENAME_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
 def project_dir(library: str | None, project_id: str) -> Path:
@@ -59,10 +66,30 @@ def speech_intervals_path(project: ProjectRow) -> Path:
     return project_dir(project.library, project.id) / "speech_intervals.json"
 
 
-def clip_path(project: ProjectRow, clip_id: str) -> Path:
-    p = project_dir(project.library, project.id) / "clips" / f"{clip_id}.mp4"
-    p.parent.mkdir(parents=True, exist_ok=True)
+def clip_filename(title: str, clip_id: str) -> str:
+    """Filesystem-safe filename derived from the clip's display title. We use
+    the title (not the internal clip_id) so the on-disk mp4 is recognisable
+    when the user opens their project folder in Finder / Explorer — a
+    Mandarin clip ends up as "AI 时代…mp4", not "p_e54b803b-c59.mp4".
+
+    Falls back to the clip_id if the title contains nothing usable after
+    stripping illegal filename characters. The extension is fixed: clips are
+    always mp4."""
+    safe = _FILENAME_ILLEGAL.sub("", title or "").strip()
+    return f"{safe or clip_id}.mp4"
+
+
+def clips_dir(project: ProjectRow) -> Path:
+    p = project_dir(project.library, project.id) / "clips"
+    p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def clip_path(project: ProjectRow, clip_id: str, title: str | None = None) -> Path:
+    """Path the renderer writes the clip's mp4 to. Title-derived so it's
+    recognisable in the file manager; falls back to clip_id when no title is
+    available (legacy callers / safety net)."""
+    return clips_dir(project) / clip_filename(title or clip_id, clip_id)
 
 
 def delete_project_dir(library: str | None, project_id: str) -> None:

@@ -31,7 +31,8 @@ async def get_clip(clip_id: str) -> Clip:
     row = await ds.get_clip(clip_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
-    return clip_row_to_dto(row)
+    project = await ds.get_project(row.project_id)
+    return clip_row_to_dto(row, project)
 
 
 @router.patch("/{clip_id}", response_model=Clip, response_model_by_alias=True)
@@ -101,11 +102,40 @@ async def update_clip_bounds(clip_id: str, body: ClipUpdate) -> Clip:
         },
     )
     assert updated is not None
-    # Render is deferred to the next Download click. We don't enqueue a
+    # Render is deferred to the next Prepare click. We don't enqueue a
     # background render here because at MVP scale the user may trim many
-    # clips before downloading any, and pre-rendering them all would
-    # queue hours of ffmpeg work for clips that may never be downloaded.
-    return clip_row_to_dto(updated)
+    # clips before preparing any, and pre-rendering them all would queue
+    # hours of ffmpeg work for clips that may never be acted on.
+    return clip_row_to_dto(updated, project)
+
+
+@router.post("/{clip_id}/prepare", response_model=Clip, response_model_by_alias=True)
+async def prepare_clip(clip_id: str) -> Clip:
+    """Render the clip mp4 into the project folder (idempotent) and return
+    the updated Clip DTO so the frontend can flip into the Ready state and
+    show the on-disk path. Replaces the old GET /clips/{id}/download flow
+    for the desktop app — no HTTP body transfer, no Blob assembly in the
+    browser, just "the file is in your project folder, here's where."
+
+    GET /clips/{id}/download is kept for dev / web profiles where there is
+    no native filesystem access; production desktop UX never hits it."""
+    ds = get_datastore()
+    row = await ds.get_clip(clip_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Clip not found")
+    project = await ds.get_project(row.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    try:
+        await pipeline.ensure_clip_rendered(row.project_id, clip_id)
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Failed to render clip: {e}",
+        ) from e
+    refreshed = await ds.get_clip(clip_id)
+    assert refreshed is not None
+    return clip_row_to_dto(refreshed, project)
 
 
 @router.get("/{clip_id}/download")

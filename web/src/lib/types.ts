@@ -88,6 +88,15 @@ export type Clip = {
   thumbFrame: number;
   original?: { startSec: number; endSec: number };
   needsRender?: boolean;
+  // Set by the backend at read time: true iff an mp4 currently exists on
+  // disk AND the trim bounds haven't changed since it was rendered.
+  // Drives the Clip Detail file-actions surface (Unrendered / Ready /
+  // Stale). Optional for forward-compatibility with older payloads.
+  rendered?: boolean;
+  // Absolute filesystem path to the rendered mp4 when one exists (whether
+  // in-sync or stale). Frontend pairs this with the Tauri reveal_path
+  // command. Null/undefined when no file has been rendered yet.
+  renderedPath?: string | null;
 };
 
 export type JobStage = keyof Pipeline | "download";

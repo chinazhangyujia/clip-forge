@@ -15,7 +15,7 @@ import {
 } from "@/lib/utils";
 import { Icon, Spinner } from "@/lib/icons";
 import { TrimPanel } from "@/components/TrimPanel";
-import { DownloadControl } from "@/components/DownloadControl";
+import { ClipFileActions } from "@/components/ClipFileActions";
 import { CutDivider, CutTickRail, CutsSummary } from "@/components/Cuts";
 import type {
   Clip,
@@ -209,7 +209,10 @@ export const ClipDetail = ({
             <span>{fmtDuration(clip.duration)}</span>
           </div>
         </div>
-        <DownloadControl clip={clip} />
+        <ClipFileActions
+          clip={clip}
+          onClipUpdated={(updated) => updateClipLocally(clip.id, updated)}
+        />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "flex-start" }}>
